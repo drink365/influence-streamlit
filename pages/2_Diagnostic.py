@@ -10,7 +10,7 @@ from src.ui.theme import inject_css
 from src.repos.cases import CaseRepo
 from src.config import DATA_DIR
 
-# ---------- 風格 ----------
+# ---------- 基本設定 / 風格 ----------
 st.set_page_config(page_title="60 秒傳承風險診斷", page_icon="🧭", layout="wide")
 inject_css()
 
@@ -39,12 +39,14 @@ st.markdown(f"""
   .yc-step {{ display:flex; gap:.6rem; align-items:center; margin:.4rem 0 1rem; color:#374151; font-weight:700; }}
   .yc-dot  {{ width:26px; height:26px; border-radius:999px; background:{PRIMARY}11; border:1px solid {PRIMARY}55; display:flex; align-items:center; justify-content:center; font-size:12px; color:{PRIMARY}; }}
   .yc-cta button[kind="primary"] {{ background:{PRIMARY} !important; border-color:{PRIMARY} !important; border-radius:999px !important; font-weight:700 !important; }}
+  .yc-muted {{ color:#666; font-size:13px; }}
+  .yc-alert {{ background:#fff9f0; border:1px solid #facc15; color:#92400e; padding:8px 12px; border-radius:10px; font-size:13px; }}
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- 單次導頁旗標處理（避免殘留造成誤跳） ----------
+# ---------- 單次導頁旗標（成功後才會設定；這裡用完即清） ----------
 go_case = st.session_state.pop("__go_result_case", None)
-if go_case:  # 只有成功提交後才會設置
+if go_case:
     st.session_state["last_case_id"] = go_case
     st.switch_page("pages/3_Result.py")
 
@@ -115,9 +117,32 @@ with st.form("diag_form", clear_on_submit=False):
     st.markdown('<div class="yc-step"><div class="yc-dot">4</div><div>送出診斷</div></div>', unsafe_allow_html=True)
     agree = st.checkbox("我了解此為初步診斷，結果僅供參考；若需實務落地將由專業顧問協助。", value=True)
 
-    submitted = st.form_submit_button("查看診斷結果 ➜", type="primary", use_container_width=True)
+    # ---- 即時校驗（控制按鈕鎖定；Enter 也不會送出）----
+    missing_live = []
+    if not (name or "").strip():        missing_live.append("姓名")
+    if not (email or "").strip():       missing_live.append("Email")
+    if not (mobile or "").strip():      missing_live.append("手機")
+    if total_assets <= 0:               missing_live.append("資產盤點")
+    if not agree:                       missing_live.append("同意聲明")
 
-# ---------- 提交後處理 ----------
+    if missing_live:
+        st.markdown(
+            "<div class='yc-alert'>尚未完成項目："
+            + "、".join(missing_live) +
+            "</div>",
+            unsafe_allow_html=True
+        )
+
+    is_ready = len(missing_live) == 0
+
+    submitted = st.form_submit_button(
+        "查看診斷結果 ➜",
+        type="primary",
+        use_container_width=True,
+        disabled=not is_ready  # 只要未完成就鎖定；Enter 也不會送出
+    )
+
+# ---------- 提交後處理（雙保險；就算被點擊也再驗一次） ----------
 if submitted:
     missing = []
     if not name.strip(): missing.append("姓名")
@@ -160,4 +185,5 @@ if submitted:
         except Exception as e:
             st.error(f"寫入個案資料時發生錯誤：{e}")
 
+# ---------- 頁尾 ----------
 footer()
