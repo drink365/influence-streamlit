@@ -1,6 +1,6 @@
 import streamlit as st
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 import csv
 from io import BytesIO
@@ -13,11 +13,6 @@ DATA_DIR.mkdir(parents=True, exist_ok=True)
 CASES_CSV = DATA_DIR / "cases.csv"
 
 # ===== 嘗試載入可選套件（非必須，避免部署卡住） =====
-try:
-    import pandas as pd  # 選用
-except Exception:
-    pd = None
-
 try:
     from docx import Document  # 選用
     from docx.shared import Pt
@@ -101,7 +96,7 @@ def build_docx_bytes(case_id: str, case: dict) -> bytes | None:
             pass
     doc.add_heading("影響力平台｜傳承規劃簡版報告", level=1)
     doc.add_paragraph(f"個案編號：{case_id}")
-    doc.add_paragraph(f"建立時間：{datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+    doc.add_paragraph(f"建立時間：{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
     doc.add_heading("一、基本資料", level=2)
     doc.add_paragraph(f"申請人：{case.get('name') or '（未填）'}")
     doc.add_paragraph(f"婚姻：{case.get('marital','')}　子女：{case.get('children','')}")
@@ -138,7 +133,7 @@ def build_txt_bytes(case_id: str, case: dict) -> bytes:
     lines = []
     lines.append("影響力平台｜傳承規劃簡版報告")
     lines.append(f"個案編號：{case_id}")
-    lines.append(f"建立時間：{datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+    lines.append(f"建立時間：{datetime.now(timezone.utc).strftime('%Y-%m-%d %H:%M UTC')}")
     lines.append("")
     lines.append("一、基本資料")
     lines.append(f"- 申請人：{case.get('name') or '（未填）'}")
@@ -233,10 +228,10 @@ def page_diagnostic():
         mobile = c9.text_input("手機")
         email = st.text_input("Email")
 
-        # 表單提交（唯一的提交按鈕）
+        # ✅ 表單內唯一提交按鈕
         submitted = st.form_submit_button("產生診斷結果與 CaseID")
 
-    # 表單外處理：提交後寫入 & 自動導向「結果」頁
+    # ✅ 表單外處理：提交後寫入 & 自動導向結果頁
     if submitted:
         case_id = "YC-" + uuid.uuid4().hex[:6].upper()
         total_assets = equity + real_estate + financial
@@ -246,7 +241,7 @@ def page_diagnostic():
         gap_high = max(0, liq_high - insurance_cov)
 
         row = {
-            "ts": datetime.utcnow().isoformat(),
+            "ts": datetime.now(timezone.utc).isoformat(),
             "case_id": case_id,
             "name": name, "mobile": mobile, "email": email,
             "marital": marital, "children": int(children), "special": special,
@@ -260,7 +255,6 @@ def page_diagnostic():
         append_case_row(row)
 
         st.session_state.last_case_id = case_id
-        st.success(f"已建立個案：{case_id}（已自動跳轉至結果頁）")
         st.session_state.page = "結果"
         st.rerun()
 
