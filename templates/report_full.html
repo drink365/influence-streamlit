@@ -1,3 +1,4 @@
+"""
 <!doctype html>
 <html lang="zh-Hant">
 <head>
@@ -5,57 +6,112 @@
   <meta name="viewport" content="width=device-width, initial-scale=1" />
   <title>{{ title }}</title>
   <style>
-    body { font-family: -apple-system, BlinkMacSystemFont, "Noto Sans TC", "Segoe UI", Roboto, Arial, sans-serif; margin: 32px; color: #222; }
-    h1 { font-size: 28px; margin: 0 0 12px; }
-    h2 { font-size: 20px; margin: 24px 0 8px; border-bottom: 1px solid #eee; padding-bottom: 4px; }
-    .meta { color: #666; font-size: 12px; margin-bottom: 20px; }
+    :root {
+      --primary: {{ primary_color }};
+      --accent:  {{ accent_color }};
+      --text:    {{ text_color }};
+    }
+    * { box-sizing: border-box; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Noto Sans TC", "Segoe UI", Roboto, Arial, sans-serif; margin: 0; color: var(--text); }
+    .page { padding: 36px 40px; }
+    .cover { background: linear-gradient(135deg, var(--primary), #0ea5a7); color: #fff; padding: 56px 40px 64px; }
+    .brand { display: flex; align-items: center; gap: 16px; }
+    .brand img { height: 40px; }
+    h1 { font-size: 28px; margin: 16px 0 4px; }
+    .meta { opacity: .9; font-size: 13px; }
     .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
-    .card { border: 1px solid #eee; border-radius: 8px; padding: 12px; }
+    .card { border: 1px solid #eee; border-radius: 10px; padding: 12px; background: #fff; }
     .kpi { font-size: 14px; line-height: 1.6; }
     .kpi strong { font-size: 18px; }
+    h2 { font-size: 20px; margin: 24px 0 8px; border-bottom: 2px solid var(--primary); padding-bottom: 4px; color: var(--primary); }
     img { max-width: 100%; display: block; }
     ul { margin: 8px 0 0 18px; }
     .footer { margin-top: 24px; font-size: 11px; color: #777; }
+    .toc li { margin: 6px 0; }
+    .advisor { display: grid; grid-template-columns: 1fr 160px; gap: 16px; align-items: center; }
+    .qr { text-align: center; font-size: 12px; }
+    .qr img { width: 140px; height: 140px; }
   </style>
 </head>
 <body>
-  <h1>{{ title }}</h1>
-  <div class="meta">案件碼：{{ case_id }} ｜ 客戶：{{ client_alias }} ｜ 產生日期：{{ date_str }}</div>
-
-  <div class="grid">
-    <div class="card kpi">
-      淨遺產（元）<br><strong>{{ net_estate }}</strong>
+  <!-- 封面 -->
+  <div class="cover">
+    <div class="brand">
+      {% if logo_data_uri %}<img src="{{ logo_data_uri }}" alt="logo"/>{% endif %}
+      <div><strong>{{ brand_name }}</strong></div>
     </div>
-    <div class="card kpi">
-      估算稅額（元）<br><strong>{{ tax_estimate }}</strong>
-    </div>
-    <div class="card kpi">
-      建議預留稅源（元）<br><strong>{{ liquidity_needed }}</strong>
-    </div>
-    <div class="card kpi">
-      稅則版本 ｜ 課稅基礎（萬）<br><strong>{{ rules_version }} ｜ {{ taxable_base_wan }}</strong>
-    </div>
+    <h1>{{ title }}</h1>
+    <div class="meta">案件碼：{{ case_id }} ｜ 客戶：{{ client_alias }} ｜ 產生日期：{{ date_str }}</div>
   </div>
 
-  <h2>視覺化摘要</h2>
-  <div class="grid">
-    <div class="card">
-      <div>各級距稅額拆解（萬元）</div>
-      <img src="{{ img_tax }}" alt="tax breakdown"/>
+  <div class="page">
+    <!-- 目錄 -->
+    <h2>目錄</h2>
+    <ol class="toc">
+      <li>重點指標</li>
+      <li>視覺化摘要</li>
+      <li>策略建議</li>
+      <li>顧問聯絡</li>
+      <li>重要說明</li>
+    </ol>
+
+    <!-- 重點指標 -->
+    <h2>重點指標</h2>
+    <div class="grid">
+      <div class="card kpi">淨遺產（元）<br><strong>{{ net_estate }}</strong></div>
+      <div class="card kpi">估算稅額（元）<br><strong>{{ tax_estimate }}</strong></div>
+      <div class="card kpi">建議預留稅源（元）<br><strong>{{ liquidity_needed }}</strong></div>
+      <div class="card kpi">稅則版本 ｜ 課稅基礎（萬）<br><strong>{{ rules_version }} ｜ {{ taxable_base_wan }}</strong></div>
     </div>
-    <div class="card">
-      <div>資產結構（佔比）</div>
-      <img src="{{ img_asset }}" alt="asset pie"/>
+
+    <!-- 圖表 -->
+    <h2>視覺化摘要</h2>
+    <div class="grid">
+      <div class="card">
+        <div>各級距稅額拆解（萬元）</div>
+        <img src="{{ img_tax }}" alt="tax breakdown"/>
+      </div>
+      <div class="card">
+        <div>資產結構（佔比）</div>
+        <img src="{{ img_asset }}" alt="asset pie"/>
+      </div>
     </div>
+
+    <!-- 策略建議 -->
+    <h2>策略建議</h2>
+    <div class="card">
+      <ul>
+        {% for s in strategies %}<li>{{ s }}</li>{% endfor %}
+      </ul>
+    </div>
+
+    <!-- 顧問聯絡 -->
+    <h2>顧問聯絡</h2>
+    <div class="card advisor">
+      <div>
+        <div><strong>{{ contact.company }}</strong></div>
+        <div>{{ contact.address }}</div>
+        <div>{{ contact.phone }} ｜ {{ contact.email }}</div>
+        <div><a href="{{ contact.website }}">{{ contact.website }}</a></div>
+      </div>
+      <div class="qr">
+        {% if booking_qr %}
+          <img src="{{ booking_qr }}" alt="booking QR"/>
+          <div>掃碼預約完整方案</div>
+        {% else %}
+          <div><a href="{{ contact.booking_url }}">預約連結</a></div>
+        {% endif %}
+      </div>
+    </div>
+
+    <!-- 說明 -->
+    <h2>重要說明</h2>
+    <ul>
+      {% for n in notes %}<li>{{ n }}</li>{% endfor %}
+    </ul>
+
+    <div class="footer">© {{ brand_name }}｜本報告僅供內部規劃參考，不構成投資或保險建議。</div>
   </div>
-
-  <h2>重要說明</h2>
-  <ul>
-    {% for n in notes %}
-    <li>{{ n }}</li>
-    {% endfor %}
-  </ul>
-
-  <div class="footer">© 永傳家族辦公室｜本報告僅供內部規劃參考，不構成投資或保險建議。</div>
 </body>
 </html>
+"""
