@@ -47,13 +47,11 @@ st.markdown("""
 """, unsafe_allow_html=True)
 
 # ---------- 成功／重置旗標（一定要在任何元件渲染前處理） ----------
-# 若上一輪提交成功，這裡會顯示成功畫面，且不渲染表單
 success_id = st.session_state.pop("__booking_success", None)
 
-# 若上一輪要求清空欄位，先在這輪開始時安全清空，再移除旗標
 if st.session_state.get("__reset_booking_pending"):
     for k in ["booking_case_id", "booking_name", "booking_email", "booking_mobile", "booking_time", "booking_need"]:
-        st.session_state[k] = ""  # 清成空字串，型別與 text_input 相容
+        st.session_state[k] = ""  # 清成空字串，與 text_input 相容
     st.session_state.pop("__reset_booking_pending", None)
 
 # ---------- 接收預填資料 ----------
@@ -86,7 +84,14 @@ st.session_state["booking_name"]   = st.session_state["booking_name"]   or user_
 st.session_state["booking_email"]  = st.session_state["booking_email"]  or user_data.get("email", "")
 st.session_state["booking_mobile"] = st.session_state["booking_mobile"] or user_data.get("phone", "")
 
-# ---------- 若剛提交成功：顯示成功畫面並結束本輪（避免再渲染表單造成混亂） ----------
+# ---------- 導頁工具（雙保險） ----------
+def safe_switch(page_path: str, fallback_label: str):
+    try:
+        st.switch_page(page_path)
+    except Exception:
+        st.page_link(page_path, label=fallback_label)
+
+# ---------- 若剛提交成功：顯示成功畫面並結束本輪 ----------
 if success_id:
     st.markdown('<div class="yc-hero">', unsafe_allow_html=True)
     st.markdown('<span class="yc-badge">預約成功</span>', unsafe_allow_html=True)
@@ -99,11 +104,11 @@ if success_id:
 
     a, b = st.columns([1,1])
     with a:
-        if st.button("回首頁", use_container_width=True):
-            st.switch_page("app.py")
+        if st.button("🏠 回首頁", use_container_width=True):
+            safe_switch("app.py", "🏠 回首頁（點此跳轉）")
     with b:
-        if st.button("返回診斷", use_container_width=True):
-            st.switch_page("pages/2_Diagnostic.py")
+        if st.button("🔁 返回診斷", use_container_width=True):
+            safe_switch("pages/2_Diagnostic.py", "🔁 返回診斷（點此跳轉）")
 
     footer()
     st.stop()
