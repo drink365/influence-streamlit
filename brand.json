@@ -1,0 +1,14 @@
+{
+  "name": "永傳家族辦公室",
+  "primary_color": "#0F766E",
+  "accent_color": "#F59E0B",
+  "text_color": "#222222",
+  "logo_path": "assets/logo.png",
+  "contact": {
+    "company": "永傳家族辦公室",
+    "address": "台北市中山區南京東路二段101號9樓",
+    "email": "123@gracefo.com",
+    "website": "https://gracefo.com",
+    "booking_url": "https://gracefo.com/booking"
+  }
+}
