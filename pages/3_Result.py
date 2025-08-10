@@ -190,14 +190,18 @@ with cta1:
 
 with cta2:
     if st.button("📅 預約 30 分鐘會談", type="primary", use_container_width=True):
-        st.session_state["booking_prefill"] = {
-            "case_id": case_id or "",
-            "name":   case.get("name",""),
-            "email":  case.get("email",""),
-            "mobile": case.get("mobile",""),
-            "need":   f"我想進一步討論交棒流動性與保障規劃（估算需求 {fmt_num(liq_need)}）。重點關注：{(case.get('focus') or '—')}",
-        }
+        # 把用戶資料帶到預約頁（5_Booking.py 會讀 st.session_state.user_data）
+        st.session_state.setdefault("user_data", {})
+        st.session_state.user_data.update({
+            "name":  case.get("name", ""),
+            "email": case.get("email", ""),
+            # 你的資料欄位在 CSV 叫 mobile，就先放到 phone 給預約頁使用
+            "phone": case.get("mobile", "") or case.get("phone", ""),
+            # 若你想在預約頁顯示個案編號，也一併放進去（預約頁目前未使用到，可保留）
+            "case_id": case_id or ""
+        })
         st.switch_page("pages/5_Booking.py")
+
 
 with cta3:
     if st.button("🏠 回首頁", use_container_width=True):
