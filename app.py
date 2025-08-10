@@ -12,8 +12,7 @@ DATA_DIR = Path("data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CASES_CSV = DATA_DIR / "cases.csv"
 
-# ===== 嘗試載入可選套件（非必須） =====
-# 這樣即使沒安裝 pandas / python-docx 也能運作，不會卡 oven
+# ===== 嘗試載入可選套件（非必須，避免部署卡住） =====
 try:
     import pandas as pd  # 選用
 except Exception:
@@ -234,34 +233,36 @@ def page_diagnostic():
         mobile = c9.text_input("手機")
         email = st.text_input("Email")
 
+        # 表單提交（唯一的提交按鈕）
         submitted = st.form_submit_button("產生診斷結果與 CaseID")
-        if submitted:
-            case_id = "YC-" + uuid.uuid4().hex[:6].upper()
-            total_assets = equity + real_estate + financial
-            liq_low = round(total_assets * 0.10)
-            liq_high = round(total_assets * 0.20)
-            gap_low = max(0, liq_low - insurance_cov)
-            gap_high = max(0, liq_high - insurance_cov)
 
-            row = {
-                "ts": datetime.utcnow().isoformat(),
-                "case_id": case_id,
-                "name": name, "mobile": mobile, "email": email,
-                "marital": marital, "children": int(children), "special": special,
-                "equity": int(equity), "real_estate": int(real_estate), "financial": int(financial),
-                "insurance_cov": int(insurance_cov),
-                "focus": "|".join(focus),
-                "total_assets": int(total_assets),
-                "liq_low": int(liq_low), "liq_high": int(liq_high),
-                "gap_low": int(gap_low), "gap_high": int(gap_high),
-            }
-            append_case_row(row)
+    # 表單外處理：提交後寫入 & 自動導向「結果」頁
+    if submitted:
+        case_id = "YC-" + uuid.uuid4().hex[:6].upper()
+        total_assets = equity + real_estate + financial
+        liq_low = round(total_assets * 0.10)
+        liq_high = round(total_assets * 0.20)
+        gap_low = max(0, liq_low - insurance_cov)
+        gap_high = max(0, liq_high - insurance_cov)
 
-            st.session_state.last_case_id = case_id
-            st.success(f"已建立個案：{case_id}")
-            if st.button("查看診斷結果 ➜"):
-                st.session_state.page = "結果"
-                st.rerun()
+        row = {
+            "ts": datetime.utcnow().isoformat(),
+            "case_id": case_id,
+            "name": name, "mobile": mobile, "email": email,
+            "marital": marital, "children": int(children), "special": special,
+            "equity": int(equity), "real_estate": int(real_estate), "financial": int(financial),
+            "insurance_cov": int(insurance_cov),
+            "focus": "|".join(focus),
+            "total_assets": int(total_assets),
+            "liq_low": int(liq_low), "liq_high": int(liq_high),
+            "gap_low": int(gap_low), "gap_high": int(gap_high),
+        }
+        append_case_row(row)
+
+        st.session_state.last_case_id = case_id
+        st.success(f"已建立個案：{case_id}（已自動跳轉至結果頁）")
+        st.session_state.page = "結果"
+        st.rerun()
 
     footer()
 
