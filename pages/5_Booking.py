@@ -1,249 +1,159 @@
 # pages/5_Booking.py
-import streamlit as st
-from pathlib import Path
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from pathlib import Path
+import smtplib, ssl
+from email.message import EmailMessage
+import streamlit as st
 
 from src.ui.footer import footer
-from src.repos.bookings import BookingRepo
-from src.services.mailer import send_email
-from src.utils import valid_email, valid_phone
-from src.config import SMTP, DATA_DIR
-from src.ui.theme import inject_css  # 若尚未建立 theme.py，請先加入
+from src.ui.theme import inject_css
+from src.config import DATA_DIR
 
-# --------- 品牌配色 ----------
-PRIMARY = "#BD0E1B"   # 品牌紅
-ACCENT  = "#A88716"   # 金色
-INK     = "#3C3F46"   # 深灰
-BG_SOFT = "#F7F7F8"
-
-st.set_page_config(page_title="預約諮詢｜永傳家族辦公室", page_icon="📅", layout="wide")
+st.set_page_config(page_title="預約會談", page_icon="📅", layout="wide")
 inject_css()
+TPE = ZoneInfo("Asia/Taipei")
 
-# 追加品牌化 CSS
-st.markdown(f"""
+# ---------- 樣式 ----------
+st.markdown("""
 <style>
-  .yc-hero {{
-    background: linear-gradient(180deg, {BG_SOFT} 0%, #FFFFFF 100%);
-    border: 1px solid rgba(0,0,0,0.04);
-    border-radius: 20px;
-    padding: 24px 28px;
-    box-shadow: 0 8px 30px rgba(0,0,0,0.06);
-  }}
-  .yc-hero h1 {{ margin: .2rem 0 .5rem; font-size: 30px; color: {INK}; }}
-  .yc-hero p {{ color: #555; margin: 0; }}
-  .yc-badge {{
-    display:inline-block; padding:6px 10px; border-radius:999px;
-    background:{ACCENT}14; color:{ACCENT}; font-size:12px; font-weight:700;
-    border:1px solid {ACCENT}44; letter-spacing:.3px;
-  }}
-  .yc-card {{
-    background: #fff; border-radius: 16px; padding: 18px 18px;
-    border: 1px solid rgba(0,0,0,0.06); box-shadow: 0 6px 22px rgba(0,0,0,0.05);
-  }}
-  .yc-cta button[kind="primary"] {{
-    background:{PRIMARY} !important; border-color:{PRIMARY} !important;
-    border-radius: 999px !important; font-weight: 700 !important;
-  }}
-  .yc-muted {{ color:#666; font-size:13px; }}
-  .yc-infobox {{
-    margin-top:.8rem; padding:12px 14px; background:#f7f7f8; border-radius:12px;
-    border:1px solid rgba(0,0,0,.06);
-  }}
-  .yc-kv {{ display:flex; gap:.4rem; margin:.2rem 0; }}
-  .yc-kv b {{ min-width:64px; color:{INK}; }}
+  .yc-card { background:#fff; border-radius:16px; padding:18px;
+             border:1px solid rgba(0,0,0,.06); box-shadow:0 6px 22px rgba(0,0,0,.05); }
+  .yc-hero { background:linear-gradient(180deg,#F7F7F8 0%,#FFF 100%);
+             border-radius:20px; padding:24px 28px; }
+  .yc-badge { display:inline-block; padding:6px 10px; border-radius:999px;
+              background:rgba(168,135,22,0.14); color:#A88716; font-size:12px; font-weight:700;
+              border:1px solid rgba(168,135,22,0.27); }
+  .yc-alert { background:#fff9f0; border:1px solid #facc15; color:#92400e;
+              padding:8px 12px; border-radius:10px; font-size:13px; }
 </style>
 """, unsafe_allow_html=True)
 
-# --------- Logo + Hero ----------
-logo_h = Path("assets/logo-horizontal.png")
-logo_v = Path("assets/logo-vertical.png")
-logo_src = str(logo_h) if logo_h.exists() else (str(logo_v) if logo_v.exists() else None)
+# ---------- 接收結果頁帶來的預填資料 ----------
+prefill = st.session_state.pop("booking_prefill", None)
+# 設定 booking_* 的預設值（只在第一次進頁面時）
+defaults = {
+    "booking_name": "",
+    "booking_email": "",
+    "booking_mobile": "",
+    "booking_need": "",
+    "booking_time": "",  # 使用者可自行輸入偏好時段（或改為 selectbox/日曆）
+}
+for k, v in defaults.items():
+    st.session_state.setdefault(k, v)
 
-with st.container():
-    col_logo, col_title = st.columns([1,2], vertical_alignment="center")
-    with col_logo:
-        if logo_src:
-            st.image(logo_src, use_column_width=True)
-    with col_title:
-        st.markdown('<div class="yc-hero">', unsafe_allow_html=True)
-        st.markdown('<span class="yc-badge">預約諮詢</span>', unsafe_allow_html=True)
-        st.markdown("<h1>預約 30 分鐘線上會談</h1>", unsafe_allow_html=True)
-        st.markdown("<p>只要 1 分鐘，讓我們更了解您的情況，專人將與您聯繫確認時段。</p>", unsafe_allow_html=True)
-        st.markdown("</div>", unsafe_allow_html=True)
+# 有從結果頁帶來的就覆蓋一次（只這次），之後使用者的編輯不被覆蓋
+if prefill:
+    st.session_state["booking_name"]   = prefill.get("name",   st.session_state["booking_name"])
+    st.session_state["booking_email"]  = prefill.get("email",  st.session_state["booking_email"])
+    st.session_state["booking_mobile"] = prefill.get("mobile", st.session_state["booking_mobile"])
+    if prefill.get("need"):
+        st.session_state["booking_need"] = prefill["need"]
 
+# ---------- Hero ----------
+st.markdown('<div class="yc-hero">', unsafe_allow_html=True)
+st.markdown('<span class="yc-badge">預約會談</span>', unsafe_allow_html=True)
+st.subheader("留下您的聯絡方式，我們會盡快與您確認時段")
+st.markdown("</div>", unsafe_allow_html=True)
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-# --------- 確保 data 目錄存在 ----------
-try:
-    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
-except Exception as e:
-    st.error(f"無法建立資料夾 data/：{e}")
-
-repo = BookingRepo()
-TPE = ZoneInfo("Asia/Taipei")
-
-# --------- 成功畫面狀態 ----------
-if "booking_submitted" not in st.session_state:
-    st.session_state.booking_submitted = False
-if "booking_payload" not in st.session_state:
-    st.session_state.booking_payload = {}
-
-def success_view():
-    p = st.session_state.get("booking_payload", {})
-    # 調整顯示順序：姓名/Email/手機/需求 → 最後呈現提交時間（台北）
-    st.markdown(f"""
-    <div class="yc-card" style="border-left:6px solid {PRIMARY};">
-      <h3 style="margin:.2rem 0 .6rem;">已收到您的預約申請</h3>
-      <p class="yc-muted">我們將在 1 個工作日內與您聯繫，確認最適合您的時段。</p>
-      <div class="yc-infobox">
-        <div class="yc-kv"><b>姓名：</b><span>{p.get('name','—')}</span></div>
-        <div class="yc-kv"><b>Email：</b><span>{p.get('email','—')}</span></div>
-        <div class="yc-kv"><b>手機：</b><span>{p.get('phone','—')}</span></div>
-        <div class="yc-kv" style="align-items:flex-start;"><b>需求：</b>
-          <span>{(p.get('request') or p.get('notes') or '—').replace('\n','<br>')}</span>
-        </div>
-        <div class="yc-muted" style="margin-top:.3rem;">提交時間（台北）：{p.get('ts_local','')}</div>
-      </div>
-    </div>
-    """, unsafe_allow_html=True)
-    st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
-    if st.button("回首頁", use_container_width=True):
-        st.switch_page("app.py")
-
-if st.session_state.booking_submitted:
-    success_view()
-    footer()
-    st.stop()
-
-# --------- 表單（四欄位必填） ----------
+# ---------- 表單 ----------
 st.markdown('<div class="yc-card">', unsafe_allow_html=True)
-st.write("### 聯絡方式")
-st.caption("以下四項皆為必填；正確聯絡方式能協助我們更快與您確認時段。")
+c1, c2 = st.columns(2)
+with c1:
+    st.text_input("姓名 *", key="booking_name")
+with c2:
+    st.text_input("Email *", key="booking_email")
 
-with st.form("booking_form", clear_on_submit=False):
-    c1, c2 = st.columns(2)
-    with c1:
-        name  = st.text_input("姓名 *", placeholder="請輸入姓名")
-        phone = st.text_input("手機 *", placeholder="+886 9xx xxx xxx")
-    with c2:
-        email   = st.text_input("Email *", placeholder="name@example.com")
-        request = st.text_area("需求（請簡述想討論的主題）*", placeholder="請至少輸入 10 個字說明您的需求", height=110)
+c3, c4 = st.columns(2)
+with c3:
+    st.text_input("手機 *", key="booking_mobile", placeholder="+886 9xx xxx xxx")
+with c4:
+    st.text_input("偏好時段（例：本週三 14:00-16:00）", key="booking_time")
 
-    st.markdown("<div class='yc-cta'>", unsafe_allow_html=True)
-    submit = st.form_submit_button("送出預約申請", type="primary", use_container_width=True)
-    st.markdown("</div>", unsafe_allow_html=True)
+st.text_area("需求 *", key="booking_need", height=120, placeholder="請簡述您希望討論的內容…")
 
-st.markdown('</div>', unsafe_allow_html=True)
+# ---------- 驗證 & 送出 ----------
+missing = []
+if st.session_state["booking_name"].strip() == "":   missing.append("姓名")
+if st.session_state["booking_email"].strip() == "":  missing.append("Email")
+if st.session_state["booking_mobile"].strip() == "": missing.append("手機")
+if st.session_state["booking_need"].strip() == "":   missing.append("需求")
 
-if submit:
-    # 必填與格式驗證
-    missing = []
-    if not name.strip():    missing.append("姓名")
-    if not email.strip():   missing.append("Email")
-    if not phone.strip():   missing.append("手機")
-    if not request.strip(): missing.append("需求")
+if missing:
+    st.markdown("<div class='yc-alert'>尚未完成項目：" + "、".join(missing) + "</div>", unsafe_allow_html=True)
 
-    errors = []
-    if email.strip() and not valid_email(email): errors.append("Email 格式")
-    if phone.strip() and not valid_phone(phone): errors.append("手機格式")
-    if request.strip() and len(request.strip()) < 10: errors.append("需求字數（至少 10 字）")
+submit = st.button("送出預約申請", type="primary", use_container_width=True, disabled=bool(missing))
 
-    if missing:
-        st.error("請填寫必填欄位： " + "、".join(missing))
-    elif errors:
-        st.error("請修正欄位格式： " + "、".join(errors))
+def send_mail(subject: str, html_body: str):
+    host = st.secrets.get("SMTP_HOST", "")
+    port = int(st.secrets.get("SMTP_PORT", "587"))
+    user = st.secrets.get("SMTP_USER", "")
+    pwd  = st.secrets.get("SMTP_PASS", "")
+    mail_from = st.secrets.get("MAIL_FROM", user)
+    mail_from_name = st.secrets.get("MAIL_FROM_NAME", "")
+    mail_to_admin = st.secrets.get("MAIL_TO_ADMIN", user or mail_from)
+
+    if not (host and port and user and pwd and mail_from and mail_to_admin):
+        st.warning("郵件服務未完整設定，已略過寄信（請確認 secrets）")
+        return
+
+    msg = EmailMessage()
+    msg["Subject"] = subject
+    msg["From"] = f"{mail_from_name} <{mail_from}>" if mail_from_name else mail_from
+    msg["To"] = mail_to_admin
+    msg.set_content("HTML only", subtype="plain")
+    msg.add_alternative(html_body, subtype="html")
+
+    if port == 465:
+        context = ssl.create_default_context()
+        with smtplib.SMTP_SSL(host, port, context=context) as server:
+            server.login(user, pwd)
+            server.send_message(msg)
     else:
-        ts_local = datetime.now(TPE).strftime("%Y-%m-%d %H:%M:%S %Z")
+        with smtplib.SMTP(host, port) as server:
+            server.starttls()
+            server.login(user, pwd)
+            server.send_message(msg)
 
-        # 寫入 CSV（必要）
-        try:
-            repo.add({
-                "ts": ts_local,               # 直接存「台北時間字串」
-                "name": name.strip(),
-                "phone": phone.strip(),
-                "email": email.strip(),
-                "notes": request.strip(),     # 用戶需求
-                "status": "submitted",
-            })
-            st.toast("✅ 已寫入 bookings.csv", icon="✅")
-            wrote_ok = True
-        except Exception as e:
-            wrote_ok = False
-            st.error(f"寫入預約資料時發生錯誤：{e}")
+if submit and not missing:
+    ts = datetime.now(TPE).strftime("%Y-%m-%d %H:%M:%S %Z")
+    name   = st.session_state["booking_name"].strip()
+    email  = st.session_state["booking_email"].strip()
+    mobile = st.session_state["booking_mobile"].strip()
+    when   = st.session_state["booking_time"].strip() or "（使用者未填）"
+    need   = st.session_state["booking_need"].strip()
 
-        # 寄信（寫檔成功才試；失敗不阻斷流程）
-        if wrote_ok:
-            user_subject = "已收到您的預約申請｜永傳家族辦公室"
-            user_html = f"""
-                <p>{name} 您好，</p>
-                <p>已收到您的 30 分鐘線上會談預約申請，我們將盡快與您聯繫。</p>
-                <ul>
-                  <li>時間（台北）：{ts_local}</li>
-                  <li>手機：{phone}</li>
-                  <li>Email：{email}</li>
-                </ul>
-                <p>您填寫的需求：</p>
-                <blockquote>{request.strip()}</blockquote>
-                <p>若您有補充資訊，歡迎直接回覆此信。</p>
-                <p>— 永傳家族辦公室</p>
-            """
-            user_text = (
-                f"{name} 您好：\n\n已收到您的 30 分鐘線上會談預約申請，我們將盡快與您聯繫。\n"
-                f"- 時間（台北）：{ts_local}\n- 手機：{phone}\n- Email：{email}\n\n"
-                "您填寫的需求：\n"
-                f"{request.strip()}\n\n"
-                "若您有補充資訊，歡迎直接回覆此信。\n— 永傳家族辦公室"
-            )
-            try:
-                ok_user, msg_user = send_email(email.strip(), user_subject, user_html, user_text)
-                if ok_user:
-                    st.toast("📫 已寄出客戶確認信", icon="📫")
-                else:
-                    st.toast(f"⚠️ 客戶信未寄出：{msg_user}", icon="⚠️")
-            except Exception as e:
-                st.toast(f"⚠️ 客戶信寄送錯誤：{e}", icon="⚠️")
+    # 給顧問的通知信
+    admin_html = f"""
+    <h3>新的預約申請</h3>
+    <p><b>時間：</b>{ts}</p>
+    <p><b>姓名：</b>{name}</p>
+    <p><b>Email：</b>{email}</p>
+    <p><b>手機：</b>{mobile}</p>
+    <p><b>偏好時段：</b>{when}</p>
+    <p><b>需求：</b><br>{need.replace('\n','<br>')}</p>
+    """
+    try:
+        send_mail(subject="【影響力平台】新的預約申請", html_body=admin_html)
+    except Exception as e:
+        st.warning(f"通知信寄送失敗：{e}")
 
-            admin_to = SMTP.get("to_admin")
-            if admin_to:
-                admin_subject = "【新預約】30 分鐘會談申請"
-                admin_html = f"""
-                    <p>收到新的預約申請：</p>
-                    <ul>
-                      <li>時間（台北）：{ts_local}</li>
-                      <li>姓名：{name}</li>
-                      <li>手機：{phone}</li>
-                      <li>Email：{email}</li>
-                    </ul>
-                    <p>需求內容：</p>
-                    <blockquote>{request.strip()}</blockquote>
-                """
-                admin_text = (
-                    "收到新的預約申請：\n"
-                    f"- 時間（台北）：{ts_local}\n"
-                    f"- 姓名：{name}\n- 手機：{phone}\n- Email：{email}\n\n"
-                    "需求內容：\n"
-                    f"{request.strip()}\n"
-                )
-                try:
-                    ok_admin, msg_admin = send_email(admin_to, admin_subject, admin_html, admin_text)
-                    if ok_admin:
-                        st.toast("📨 已通知管理者", icon="📨")
-                    else:
-                        st.toast(f"⚠️ 管理者信未寄出：{msg_admin}", icon="⚠️")
-                except Exception as e:
-                    st.toast(f"⚠️ 管理者信寄送錯誤：{e}", icon="⚠️")
+    # 使用者畫面顯示成功（不再顯示表單標題段落）
+    st.success("已收到預約申請，我們將盡快與您聯繫。")
+    # 清空欄位（避免上一筆內容殘留）
+    for k in list(defaults.keys()):
+        st.session_state[k] = defaults[k]
 
-        # 切換到成功畫面（把需求一起存入 session）
-        st.session_state.booking_submitted = True
-        st.session_state.booking_payload = {
-            "ts_local": ts_local,
-            "name": name,
-            "phone": phone,
-            "email": email,
-            "request": request.strip()
-        }
-        st.rerun()
+    # 提供快速返回
+    a, b = st.columns([1,1])
+    with a:
+        if st.button("回首頁", use_container_width=True):
+            st.switch_page("app.py")
+    with b:
+        if st.button("返回診斷", use_container_width=True):
+            st.switch_page("pages/2_Diagnostic.py")
 
-# --------- 頁尾 ----------
+st.markdown("</div>", unsafe_allow_html=True)
+
 footer()
