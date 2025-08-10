@@ -1,28 +1,38 @@
 import streamlit as st
-import pandas as pd
-from io import BytesIO
-from datetime import datetime
 import uuid
+from datetime import datetime
 from pathlib import Path
-from docx import Document
-from docx.shared import Pt
+import csv
+from io import BytesIO
 
-# ========== 基本設定 ==========
+# ===== 基本設定 =====
 st.set_page_config(page_title="影響力平台", page_icon="✨", layout="wide")
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CASES_CSV = DATA_DIR / "cases.csv"
 
-# 初始化狀態
-if "cases" not in st.session_state:
-    st.session_state.cases = {}
-if "last_case_id" not in st.session_state:
-    st.session_state.last_case_id = ""
+# ===== 嘗試載入可選套件（非必須） =====
+# 這樣即使沒安裝 pandas / python-docx 也能運作，不會卡 oven
+try:
+    import pandas as pd  # 選用
+except Exception:
+    pd = None
+
+try:
+    from docx import Document  # 選用
+    from docx.shared import Pt
+except Exception:
+    Document = None
+    Pt = None
+
+# ===== 初始化狀態 =====
 if "page" not in st.session_state:
     st.session_state.page = "首頁"
+if "last_case_id" not in st.session_state:
+    st.session_state.last_case_id = ""
 
-# ========== 共用：頁尾 ==========
+# ===== 共用：頁尾 =====
 def footer():
     st.markdown("---")
     st.markdown(
@@ -36,84 +46,135 @@ def footer():
         unsafe_allow_html=True
     )
 
-# ========== 工具函式 ==========
-def save_case_to_csv(case_id: str, payload: dict):
-    df_new = pd.DataFrame([{**payload, "case_id": case_id}])
-    if CASES_CSV.exists():
-        df_old = pd.read_csv(CASES_CSV)
-        df_all = pd.concat([df_old, df_new], ignore_index=True)
-    else:
-        df_all = df_new
-    df_all.to_csv(CASES_CSV, index=False)
+# ===== 資料處理（純標準庫 csv） =====
+CSV_HEADERS = [
+    "ts","case_id","name","mobile","email","marital","children","special",
+    "equity","real_estate","financial","insurance_cov",
+    "focus","total_assets","liq_low","liq_high","gap_low","gap_high"
+]
 
-def load_case_from_csv(case_id: str):
+def append_case_row(row: dict):
+    """將 row 附加至 CSV；若檔案不存在先寫入表頭。"""
+    need_header = not CASES_CSV.exists()
+    with CASES_CSV.open("a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=CSV_HEADERS)
+        if need_header:
+            w.writeheader()
+        w.writerow({k: row.get(k, "") for k in CSV_HEADERS})
+
+def load_case(case_id: str):
     if not CASES_CSV.exists():
         return None
-    df = pd.read_csv(CASES_CSV)
-    m = df[df["case_id"] == case_id]
-    if m.empty:
+    with CASES_CSV.open("r", newline="", encoding="utf-8") as f:
+        r = csv.DictReader(f)
+        last = None
+        for row in r:
+            if row.get("case_id") == case_id:
+                last = row
+        if not last:
+            return None
+        # 型別轉換
+        for k in ["children","equity","real_estate","financial","insurance_cov",
+                  "total_assets","liq_low","liq_high","gap_low","gap_high"]:
+            if last.get(k):
+                try:
+                    last[k] = int(float(last[k]))
+                except Exception:
+                    pass
+        # focus：字串 → 清單
+        if last.get("focus"):
+            last["focus"] = [x for x in last["focus"].split("|") if x]
+        else:
+            last["focus"] = []
+        return last
+
+# ===== 報告輸出（.docx 可選，否則提供 .txt 備援） =====
+def build_docx_bytes(case_id: str, case: dict) -> bytes | None:
+    if Document is None:
         return None
-    row = m.iloc[-1].to_dict()
-    # 轉型
-    for k in ["equity","real_estate","financial","insurance_cov","total_assets","liq_low","liq_high","gap_low","gap_high","children"]:
-        if k in row and pd.notna(row[k]):
-            row[k] = int(float(row[k]))
-    if "focus" in row and isinstance(row["focus"], str):
-        row["focus"] = [s for s in row["focus"].split("|") if s]
-    return row
-
-def make_docx_report(case_id: str, case: dict) -> bytes:
     doc = Document()
-    styles = doc.styles['Normal']
-    styles.font.name = 'Microsoft JhengHei'
-    styles.font.size = Pt(11)
-
+    if Pt is not None:
+        try:
+            styles = doc.styles['Normal']
+            styles.font.name = 'Microsoft JhengHei'
+            styles.font.size = Pt(11)
+        except Exception:
+            pass
     doc.add_heading("影響力平台｜傳承規劃簡版報告", level=1)
     doc.add_paragraph(f"個案編號：{case_id}")
     doc.add_paragraph(f"建立時間：{datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
-
     doc.add_heading("一、基本資料", level=2)
-    p = doc.add_paragraph()
-    p.add_run(f"申請人：{case.get('name') or '（未填）'}　")
-    p.add_run(f"婚姻：{case.get('marital','')}　子女：{case.get('children','')}　")
-    p.add_run(f"特殊照顧對象：{case.get('special','')}")
-
+    doc.add_paragraph(f"申請人：{case.get('name') or '（未填）'}")
+    doc.add_paragraph(f"婚姻：{case.get('marital','')}　子女：{case.get('children','')}")
+    doc.add_paragraph(f"特殊照顧對象：{case.get('special','')}")
     doc.add_heading("二、資產概況（估）", level=2)
     doc.add_paragraph(f"- 公司股權：{case['equity']:,} 萬")
     doc.add_paragraph(f"- 不動產：{case['real_estate']:,} 萬")
     doc.add_paragraph(f"- 金融資產：{case['financial']:,} 萬")
     doc.add_paragraph(f"- 既有保單保額：{case['insurance_cov']:,} 萬")
     doc.add_paragraph(f"- 資產總額（估）：{case['total_assets']:,} 萬")
-
     doc.add_heading("三、交棒流動性與保障缺口（示意）", level=2)
     doc.add_paragraph(f"- 交棒流動性需求（估）：{case['liq_low']:,} – {case['liq_high']:,} 萬")
     doc.add_paragraph(f"- 可能的保障缺口：{case['gap_low']:,} – {case['gap_high']:,} 萬")
-
     doc.add_heading("四、您的重點關注", level=2)
-    focuses = case.get("focus") or []
-    if focuses:
-        for f in focuses:
+    if case.get("focus"):
+        for f in case["focus"]:
             doc.add_paragraph(f"• {f}")
     else:
         doc.add_paragraph("（未填）")
-
     doc.add_heading("五、初步建議（草案）", level=2)
-    bullets = [
+    for b in [
         "以保單建立緊急流動性池，避免交棒時資金壓力。",
         "評估是否需要信託來管理特殊照顧對象或特定資產的分配節奏。",
         "針對股權與不動產，規劃適當的傳承順序與治理安排。",
-        "視需要規劮遺囑，確保意願清楚、減少爭議。",
-    ]
-    for b in bullets:
+        "視需要規劃遺囑，確保意願清楚、減少爭議。",
+    ]:
         doc.add_paragraph(f"• {b}")
-
-    doc.add_paragraph("\n免責聲明：本報告內容為初步示意，實際方案須由專業顧問複核並依相關法令辦理。")
-
+    doc.add_paragraph("\n免責聲明：本報告為初步示意，實際方案須由專業顧問複核並依相關法令辦理。")
     bio = BytesIO()
     doc.save(bio)
     return bio.getvalue()
 
-# ========== 頁面 ==========
+def build_txt_bytes(case_id: str, case: dict) -> bytes:
+    lines = []
+    lines.append("影響力平台｜傳承規劃簡版報告")
+    lines.append(f"個案編號：{case_id}")
+    lines.append(f"建立時間：{datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+    lines.append("")
+    lines.append("一、基本資料")
+    lines.append(f"- 申請人：{case.get('name') or '（未填）'}")
+    lines.append(f"- 婚姻：{case.get('marital','')}　子女：{case.get('children','')}")
+    lines.append(f"- 特殊照顧對象：{case.get('special','')}")
+    lines.append("")
+    lines.append("二、資產概況（估）")
+    lines.append(f"- 公司股權：{case['equity']:,} 萬")
+    lines.append(f"- 不動產：{case['real_estate']:,} 萬")
+    lines.append(f"- 金融資產：{case['financial']:,} 萬")
+    lines.append(f"- 既有保單保額：{case['insurance_cov']:,} 萬")
+    lines.append(f"- 資產總額（估）：{case['total_assets']:,} 萬")
+    lines.append("")
+    lines.append("三、交棒流動性與保障缺口（示意）")
+    lines.append(f"- 交棒流動性需求（估）：{case['liq_low']:,} – {case['liq_high']:,} 萬")
+    lines.append(f"- 可能的保障缺口：{case['gap_low']:,} – {case['gap_high']:,} 萬")
+    lines.append("")
+    lines.append("四、您的重點關注")
+    if case.get("focus"):
+        lines += [f"• {f}" for f in case["focus"]]
+    else:
+        lines.append("（未填）")
+    lines.append("")
+    lines.append("五、初步建議（草案）")
+    lines += [
+        "• 以保單建立緊急流動性池，避免交棒時資金壓力。",
+        "• 評估是否需要信託來管理特殊照顧對象或特定資產的分配節奏。",
+        "• 針對股權與不動產，規劃適當的傳承順序與治理安排。",
+        "• 視需要規劃遺囑，確保意願清楚、減少爭議。",
+    ]
+    lines.append("")
+    lines.append("免責聲明：本報告為初步示意，實際方案須由專業顧問複核並依相關法令辦理。")
+    return ("\n".join(lines)).encode("utf-8")
+
+# ===== 頁面們 =====
 def page_home():
     st.title("傳承您的影響力")
     st.write("AI 智慧 + 專業顧問，打造專屬的可視化傳承方案，確保財富與愛同時流傳。")
@@ -139,8 +200,6 @@ def page_home():
             st.rerun()
 
     st.caption("免責：本平台提供之計算與建議僅供初步規劃參考，請依專業顧問複核與相關法令為準。")
-
-    # Footer
     footer()
 
 def page_diagnostic():
@@ -184,8 +243,9 @@ def page_diagnostic():
             gap_low = max(0, liq_low - insurance_cov)
             gap_high = max(0, liq_high - insurance_cov)
 
-            payload = {
+            row = {
                 "ts": datetime.utcnow().isoformat(),
+                "case_id": case_id,
                 "name": name, "mobile": mobile, "email": email,
                 "marital": marital, "children": int(children), "special": special,
                 "equity": int(equity), "real_estate": int(real_estate), "financial": int(financial),
@@ -195,10 +255,7 @@ def page_diagnostic():
                 "liq_low": int(liq_low), "liq_high": int(liq_high),
                 "gap_low": int(gap_low), "gap_high": int(gap_high),
             }
-
-            # 寫入 session 與 CSV
-            st.session_state.cases[case_id] = {**payload, "focus": focus}
-            save_case_to_csv(case_id, payload)
+            append_case_row(row)
 
             st.session_state.last_case_id = case_id
             st.success(f"已建立個案：{case_id}")
@@ -206,19 +263,19 @@ def page_diagnostic():
                 st.session_state.page = "結果"
                 st.rerun()
 
-    # Footer
     footer()
 
 def page_result():
     st.title("診斷結果（簡版）")
     case_id = st.text_input("輸入 CaseID 查詢", value=st.session_state.get("last_case_id", ""))
-
-    # 先從記憶體拿；沒有就從 CSV 載
-    case = st.session_state.cases.get(case_id) or load_case_from_csv(case_id)
-    if not case:
+    if not case_id:
         st.info("尚無資料。請先完成『快速診斷』產生 CaseID。")
-        footer()
-        return
+        footer(); return
+
+    case = load_case(case_id)
+    if not case:
+        st.warning("查無此 CaseID，請確認輸入是否正確。")
+        footer(); return
 
     st.markdown(f"**個案編號：** `{case_id}`  \n**申請人：** {case.get('name') or '（未填）'}")
     st.divider()
@@ -230,33 +287,32 @@ def page_result():
     st.write(f"- 可能的保障缺口範圍：**{case['gap_low']:,}–{case['gap_high']:,} 萬**")
     st.caption("說明：以上為示意試算，實際仍需依照家庭目標、法規與細部資產結構調整。")
 
-    st.subheader("二、可行方向（草案）")
-    bullets = [
-        "以保單建立緊急流動性池，避免交棒時資金壓力。",
-        "評估是否需要信託來管理特殊照顧對象或特定資產的分配節奏。",
-        "針對股權與不動產，規劃適當的傳承順序與治理安排。",
-        "視需要規劃遺囑，確保意願清楚、減少爭議。",
-    ]
-    for b in bullets:
-        st.write(f"- {b}")
-
-    st.subheader("三、動作與下載")
+    st.subheader("二、動作與下載")
     c1, c2 = st.columns(2)
     with c1:
         if st.button("預約 30 分鐘諮詢"):
             st.session_state.page = "預約"
             st.rerun()
     with c2:
-        docx_bytes = make_docx_report(case_id, case)
-        st.download_button(
-            label="下載簡版報告（.docx）",
-            data=docx_bytes,
-            file_name=f"{case_id}_report.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True
-        )
+        docx_bytes = build_docx_bytes(case_id, case)
+        if docx_bytes:
+            st.download_button(
+                label="下載簡版報告（.docx）",
+                data=docx_bytes,
+                file_name=f"{case_id}_report.docx",
+                mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+                use_container_width=True
+            )
+        else:
+            txt_bytes = build_txt_bytes(case_id, case)
+            st.download_button(
+                label="下載簡版報告（.txt）",
+                data=txt_bytes,
+                file_name=f"{case_id}_report.txt",
+                mime="text/plain",
+                use_container_width=True
+            )
 
-    # Footer
     footer()
 
 def page_book():
@@ -269,8 +325,6 @@ def page_book():
         notes = st.text_area("想先告訴我們的情況（選填）")
         if st.form_submit_button("送出預約申請"):
             st.success("已收到預約申請，我們將盡快與您聯繫。")
-
-    # Footer
     footer()
 
 def page_advisors():
@@ -283,8 +337,6 @@ def page_advisors():
         brand = st.text_input("希望顯示於報告的顧問品牌名稱")
         if st.form_submit_button("建立帳號（示意）"):
             st.success("註冊成功（示意）。正式版將儲存資料並寄出歡迎信。")
-
-    # Footer
     footer()
 
 def page_plans():
@@ -307,8 +359,38 @@ def page_plans():
             "- **NT$ 12,000 / 月** 或 **NT$ 120,000 / 年**"
         )
     st.caption("合規：平台僅收授權與專業服務費，不參與佣金分配或分潤。")
-
-    # Footer
     footer()
 
-def pa
+def page_privacy():
+    st.title("隱私與免責聲明")
+    st.write(
+        "- 我們重視您的個人資料保護，僅在提供服務之目的範圍內蒐集與使用。  \n"
+        "- 您可要求查詢、更正或刪除個人資料，詳情請與我們聯繫。  \n"
+        "- 本平台之計算結果與建議僅供初步規劃參考，實際方案須由專業顧問複核與法令許可範圍內執行。"
+    )
+    footer()
+
+# ===== 側邊欄導航 =====
+st.sidebar.header("功能選單")
+page = st.sidebar.radio(
+    "選擇頁面",
+    ("首頁", "診斷", "結果", "預約", "顧問", "方案", "隱私"),
+    index=("首頁","診斷","結果","預約","顧問","方案","隱私").index(st.session_state.page)
+)
+st.session_state.page = page
+
+# ===== 路由 =====
+if page == "首頁":
+    page_home()
+elif page == "診斷":
+    page_diagnostic()
+elif page == "結果":
+    page_result()
+elif page == "預約":
+    page_book()
+elif page == "顧問":
+    page_advisors()
+elif page == "方案":
+    page_plans()
+else:
+    page_privacy()
