@@ -84,7 +84,7 @@ with fc3: st.selectbox("是否已有接班人選 *", ["尚未明確","已明確"
 
 st.markdown("<hr style='margin:10px 0 16px; opacity:.15'>", unsafe_allow_html=True)
 
-# ---------------- 資產盤點（即時總額） ----------------
+# ---------------- 資產盤點（即時總額 + 交棒流動性需求 20%） ----------------
 st.markdown('<div class="yc-step"><div class="yc-dot">2</div><div>資產盤點（萬元）</div></div>', unsafe_allow_html=True)
 a1, a2, a3, a4 = st.columns(4)
 with a1: st.number_input("公司股權 *",    min_value=0, step=10, key="diag_equity")
@@ -93,7 +93,10 @@ with a3: st.number_input("金融資產 *",    min_value=0, step=10, key="diag_fi
 with a4: st.number_input("既有保單保額 *", min_value=0, step=10, key="diag_cov")
 
 total_assets = st.session_state["diag_equity"] + st.session_state["diag_re"] + st.session_state["diag_fin"] + st.session_state["diag_cov"]
+need_liquidity = round(total_assets * 0.20)  # 20%
+
 st.caption(f"目前估算總資產：約 **{total_assets:,} 萬**（僅供初步參考）")
+st.info(f"交棒流動性需求（估）：**{need_liquidity:,} 萬**（= 總資產 × 20%）")
 
 st.markdown("<hr style='margin:10px 0 16px; opacity:.15'>", unsafe_allow_html=True)
 
@@ -102,7 +105,7 @@ st.markdown('<div class="yc-step"><div class="yc-dot">3</div><div>重點關注</
 st.multiselect(
     "請選擇最多 3 項您最在意的議題",
     options=["節稅安排","現金流穩定","股權交棒","家族治理","風險隔離","資產隔代傳承","慈善安排","文件與合規"],
-    key="diag_focus",           # 只用 key 控制；不要再給 default=
+    key="diag_focus",           # 只用 key 控制；不給 default=
     max_selections=3,
 )
 st.slider("希望在幾年內完成主要傳承安排？", 1, 10, key="diag_years")
@@ -124,10 +127,11 @@ if missing:
 
 submit = st.button("查看診斷結果 ➜", type="primary", use_container_width=True, disabled=bool(missing))
 
-# ---------------- 送出後處理（成功才導頁） ----------------
+# ---------------- 送出後處理（成功才導頁；把 20% 需求一起寫入） ----------------
 if submit and not missing:
     case_id = f"CASE-{datetime.now(TPE).strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
     ts_local = datetime.now(TPE).strftime("%Y-%m-%d %H:%M:%S %Z")
+
     payload = {
         "ts": ts_local, "case_id": case_id,
         "name": st.session_state["diag_name"].strip(),
@@ -141,6 +145,9 @@ if submit and not missing:
         "financial": st.session_state["diag_fin"],
         "insurance_cov": st.session_state["diag_cov"],
         "total_assets": total_assets,
+        # 交棒流動性需求（估）＝總資產 × 20%（寫入 liq_low / liq_high 以利結果頁顯示）
+        "liq_low": need_liquidity,
+        "liq_high": need_liquidity,
         "focus": "、".join(st.session_state["diag_focus"]),
         "target_years": st.session_state["diag_years"],
         "status": "created",
