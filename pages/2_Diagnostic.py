@@ -2,7 +2,7 @@
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
-import math
+import math, csv
 
 import streamlit as st
 
@@ -22,26 +22,19 @@ TPE = ZoneInfo("Asia/Taipei")
 
 # ---------- 小工具 ----------
 def to_num(x, default=0):
-    """把輸入轉成 float，失敗回 default。"""
     try:
-        if x is None:
-            return default
-        if isinstance(x, (int, float)):
-            return float(x)
+        if x is None: return default
+        if isinstance(x, (int, float)): return float(x)
         s = str(x).replace(",", "").strip()
-        if s == "":
-            return default
+        if s == "": return default
         return float(s)
     except Exception:
         return default
 
 def fmt_num(x, unit="萬"):
-    """千分位格式；非數字或 <=0 顯示 '—'。"""
     try:
         v = float(x)
-        if math.isnan(v) or v <= 0:
-            return "—"
-        # 以萬為單位，保留無小數（若要小數可改:.1f）
+        if math.isnan(v) or v <= 0: return "—"
         return f"{v:,.0f} {unit}"
     except Exception:
         return "—"
@@ -51,27 +44,37 @@ def band(low, high, unit="萬"):
         return "—"
     return f"{fmt_num(low, unit)} – {fmt_num(high, unit)}"
 
-# ---------- 資料讀取 ----------
-try:
-    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
-except Exception as e:
-    st.error(f"無法建立資料夾 data/：{e}")
+def latest_case_from_csv():
+    """直接讀 data/cases.csv，回傳最後一筆（若有）。"""
+    path = Path(DATA_DIR) / "cases.csv"
+    if not path.exists(): 
+        return None
+    try:
+        with path.open("r", encoding="utf-8", newline="") as f:
+            rows = list(csv.DictReader(f))
+        return rows[-1] if rows else None
+    except Exception:
+        return None
 
+# ---------- 準備資料 ----------
+Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
 repo = CaseRepo()
+
+# 三重保險：session -> CSV 最新 -> 失敗提示
 case_id = st.session_state.get("last_case_id")
+case = repo.get_by_case_id(case_id) if case_id else None
+if not case:
+    case = latest_case_from_csv()
+    case_id = case.get("case_id") if case else None
+    if case_id:
+        # 補寫到 session，之後重整也能用
+        st.session_state["last_case_id"] = case_id
 
 st.title("診斷結果")
 
-if not case_id:
+if not case:
     st.warning("尚未取得個案編號。請先完成診斷。")
     if st.button("前往診斷", use_container_width=True):
-        st.switch_page("pages/2_Diagnostic.py")
-    footer(); st.stop()
-
-case = repo.get_by_case_id(case_id)
-if not case:
-    st.warning(f"找不到個案資料：{case_id}。請重新進行診斷。")
-    if st.button("回到診斷", use_container_width=True):
         st.switch_page("pages/2_Diagnostic.py")
     footer(); st.stop()
 
@@ -82,16 +85,11 @@ financial     = to_num(case.get("financial"))
 insurance_cov = to_num(case.get("insurance_cov"))
 total_assets  = to_num(case.get("total_assets", equity + real_estate + financial + insurance_cov))
 
-# 缺口 / 流動性試算（簡化版，可依你的模型再調）
-# 目標：總資產的 5%~10% 作為交棒/稅費/現金流緩衝（示意）
+# 流動性需求（預設 5~10%）
 liq_low_calc  = total_assets * 0.05
 liq_high_calc = total_assets * 0.10
-
-# 若有存進 CSV 就用；沒有就用試算值
 liq_low  = to_num(case.get("liq_low", liq_low_calc))
 liq_high = to_num(case.get("liq_high", liq_high_calc))
-
-# 保障缺口：以（估計流動性上限－既有保單保額）為參考（示意）
 gap = max(liq_high - insurance_cov, 0)
 
 # ---------- Hero 卡片 ----------
@@ -103,15 +101,13 @@ st.markdown(f"""
   }}
   .yc-hero {{ background:linear-gradient(180deg,{BG_SOFT} 0%,#FFF 100%); border-radius:20px; padding:24px 28px; }}
   .yc-badge {{ display:inline-block; padding:6px 10px; border-radius:999px; background:{ACCENT}14; color:{ACCENT}; font-size:12px; font-weight:700; border:1px solid {ACCENT}44; }}
-  .kv {{ display:flex; gap:.5rem; }}
-  .kv b {{ color:{INK}; min-width:70px; }}
 </style>
 """, unsafe_allow_html=True)
 
 st.markdown('<div class="yc-hero">', unsafe_allow_html=True)
 st.markdown('<span class="yc-badge">診斷摘要</span>', unsafe_allow_html=True)
 st.subheader(f"{case.get('name','—')} 的傳承重點")
-st.caption(f"個案編號：{case_id} ｜ 建立時間：{case.get('ts','—')}")
+st.caption(f"個案編號：{case_id or '—'} ｜ 建立時間：{case.get('ts','—')}")
 st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
@@ -135,7 +131,6 @@ with c2:
     st.markdown("#### 2) 初步建議")
     st.write(f"- 交棒流動性需求（估）：**{band(liq_low, liq_high)}**")
     st.write(f"- 當前保障缺口（參考）：**{fmt_num(gap)}**")
-    # 題目關注點
     focuses = (case.get("focus") or "").strip()
     if focuses:
         st.write(f"- 您的重點關注：**{focuses}**")
@@ -143,7 +138,7 @@ with c2:
 
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-# ---------- 下一步建議 ----------
+# ---------- 下一步 ----------
 st.markdown('<div class="yc-card">', unsafe_allow_html=True)
 st.markdown("### 下一步")
 st.markdown(
