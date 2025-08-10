@@ -10,12 +10,10 @@ from src.config import SMTP, DATA_DIR
 st.title("預約 30 分鐘線上會談")
 st.info("請留下您的聯絡方式與需求，我們將盡快與您聯繫確認時段。")
 
-# --- 先檢查/建立 data 目錄 ---
+# --- 確保 data/ 目錄存在（就算 repo 也會建，這裡再保險一次） ---
 try:
     Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
-    st.session_state["_data_dir_ok"] = True
 except Exception as e:
-    st.session_state["_data_dir_ok"] = False
     st.error(f"無法建立資料夾 data/：{e}")
 
 repo = BookingRepo()
@@ -30,17 +28,21 @@ def show_success_view():
     p = st.session_state.get("booking_payload", {})
     st.success("已收到預約申請，我們將盡快與您聯繫。")
     with st.container(border=True):
-        st.markdown(f"**姓名**：{p.get('name','—')}　｜　**Email**：{p.get('email','—')}　｜　**手機**：{p.get('phone','—')}")
-        if p.get("ts"): st.caption(f"提交時間（UTC）：{p['ts']}")
+        st.markdown(
+            f"**姓名**：{p.get('name','—')}　｜　**Email**：{p.get('email','—')}　｜　**手機**：{p.get('phone','—')}"
+        )
+        if p.get("ts"):
+            st.caption(f"提交時間（UTC）：{p['ts']}")
     st.divider()
     if st.button("回首頁", use_container_width=True):
         st.switch_page("app.py")
 
 if st.session_state.booking_success:
     show_success_view()
-    footer(); st.stop()
+    footer()
+    st.stop()
 
-# ---- 表單（提交即處理）----
+# ---- 表單（按鈕永遠可按；提交後才驗證）----
 st.subheader("留下您的聯絡方式")
 with st.form("book_form", clear_on_submit=False):
     name  = st.text_input("姓名 *")
@@ -48,20 +50,27 @@ with st.form("book_form", clear_on_submit=False):
     email = st.text_input("Email *")
     notes = st.text_area("需求與背景（選填）")
 
-    disabled = not (name.strip() and phone.strip() and email.strip())
-    submit = st.form_submit_button("送出預約申請", disabled=disabled, use_container_width=True)
+    submit = st.form_submit_button("送出預約申請", use_container_width=True)
 
     if submit:
-        # 1) 基本驗證
+        # 1) 必填與格式驗證（這裡才檢查）
+        missing = []
+        if not name.strip():  missing.append("姓名")
+        if not phone.strip(): missing.append("手機")
+        if not email.strip(): missing.append("Email")
+
         errors = []
-        if not valid_phone(phone): errors.append("手機格式")
-        if not valid_email(email): errors.append("Email 格式")
-        if errors:
-            st.error("請完成必填欄位或修正格式： " + "、".join(errors))
+        if phone.strip() and not valid_phone(phone): errors.append("手機格式")
+        if email.strip() and not valid_email(email): errors.append("Email 格式")
+
+        if missing:
+            st.error("請填寫必填欄位： " + "、".join(missing))
+        elif errors:
+            st.error("請修正欄位格式： " + "、".join(errors))
         else:
             ts = utc_now_iso()
 
-            # 2) 寫入 CSV（一定會做）
+            # 2) 寫入 CSV（必做；失敗會顯示錯誤並停止後續）
             wrote_ok = False
             try:
                 repo.add({
@@ -77,9 +86,9 @@ with st.form("book_form", clear_on_submit=False):
             except Exception as e:
                 st.error(f"寫入預約資料時發生錯誤：{e}")
 
-            # 3) 嘗試寄信（寫檔成功才試；失敗不擋流程）
+            # 3) 嘗試寄信（寫檔成功才試；SMTP 失敗不阻斷流程）
             if wrote_ok:
-                # 使用者確認信
+                # 客戶信
                 try:
                     ok_user, msg_user = send_email(
                         email.strip(),
@@ -137,7 +146,7 @@ with st.form("book_form", clear_on_submit=False):
                     except Exception as e:
                         st.toast(f"⚠️ 管理者信寄送錯誤：{e}", icon="⚠️")
 
-                # 4) 切換成功畫面
+                # 4) 切到成功畫面（避免重送）
                 st.session_state.booking_success = True
                 st.session_state.booking_payload = {
                     "ts": ts, "name": name, "phone": phone, "email": email
