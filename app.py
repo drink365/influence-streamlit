@@ -332,7 +332,7 @@ def page_diagnostic():
     with st.form("diag"):
         st.subheader("家庭結構")
         c1, c2, c3 = st.columns(3)
-        marital = c1.selectbox("婚姻狀態", ["未婚", "已婚", "離異", "喪偶"])
+        marital = c1.selectbox("婚姻狀態", ["已婚", "未婚", "離異", "喪偶"])
         children = c2.number_input("子女數", min_value=0, max_value=10, step=1, value=2)
         special = c3.selectbox("是否有特殊照顧對象", ["否", "是"])
 
