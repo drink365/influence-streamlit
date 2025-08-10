@@ -40,7 +40,7 @@ st.subheader("二、動作與下載")
 c1, c2 = st.columns(2)
 with c1:
     if st.button("回到診斷"):
-        st.switch_page("pages/2_🧭_Diagnostic.py")
+        st.switch_page("pages/2_Diagnostic.py")
 with c2:
     docx_bytes = build_docx(case_id, case)
     if docx_bytes:
