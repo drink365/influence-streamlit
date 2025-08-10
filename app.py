@@ -22,6 +22,20 @@ if "last_case_id" not in st.session_state:
 if "page" not in st.session_state:
     st.session_state.page = "首頁"
 
+# ========== 共用：頁尾 ==========
+def footer():
+    st.markdown("---")
+    st.markdown(
+        """
+        <div style='display: flex; justify-content: center; align-items: center; gap: 1.5em; font-size: 14px; color: gray;'>
+          <a href='?' style='color:#006666; text-decoration: underline;'>《影響力》傳承策略平台</a>
+          <a href='https://gracefo.com' target='_blank'>永傳家族辦公室</a>
+          <a href='mailto:123@gracefo.com'>123@gracefo.com</a>
+        </div>
+        """,
+        unsafe_allow_html=True
+    )
+
 # ========== 工具函式 ==========
 def save_case_to_csv(case_id: str, payload: dict):
     df_new = pd.DataFrame([{**payload, "case_id": case_id}])
@@ -40,10 +54,10 @@ def load_case_from_csv(case_id: str):
     if m.empty:
         return None
     row = m.iloc[-1].to_dict()
-    # 轉成整數/清單
+    # 轉型
     for k in ["equity","real_estate","financial","insurance_cov","total_assets","liq_low","liq_high","gap_low","gap_high","children"]:
         if k in row and pd.notna(row[k]):
-            row[k] = int(row[k])
+            row[k] = int(float(row[k]))
     if "focus" in row and isinstance(row["focus"], str):
         row["focus"] = [s for s in row["focus"].split("|") if s]
     return row
@@ -88,7 +102,7 @@ def make_docx_report(case_id: str, case: dict) -> bytes:
         "以保單建立緊急流動性池，避免交棒時資金壓力。",
         "評估是否需要信託來管理特殊照顧對象或特定資產的分配節奏。",
         "針對股權與不動產，規劃適當的傳承順序與治理安排。",
-        "視需要規劃遺囑，確保意願清楚、減少爭議。",
+        "視需要規劮遺囑，確保意願清楚、減少爭議。",
     ]
     for b in bullets:
         doc.add_paragraph(f"• {b}")
@@ -125,6 +139,9 @@ def page_home():
             st.rerun()
 
     st.caption("免責：本平台提供之計算與建議僅供初步規劃參考，請依專業顧問複核與相關法令為準。")
+
+    # Footer
+    footer()
 
 def page_diagnostic():
     st.title("傳承規劃｜快速診斷（MVP）")
@@ -189,6 +206,9 @@ def page_diagnostic():
                 st.session_state.page = "結果"
                 st.rerun()
 
+    # Footer
+    footer()
+
 def page_result():
     st.title("診斷結果（簡版）")
     case_id = st.text_input("輸入 CaseID 查詢", value=st.session_state.get("last_case_id", ""))
@@ -197,6 +217,7 @@ def page_result():
     case = st.session_state.cases.get(case_id) or load_case_from_csv(case_id)
     if not case:
         st.info("尚無資料。請先完成『快速診斷』產生 CaseID。")
+        footer()
         return
 
     st.markdown(f"**個案編號：** `{case_id}`  \n**申請人：** {case.get('name') or '（未填）'}")
@@ -235,6 +256,9 @@ def page_result():
             use_container_width=True
         )
 
+    # Footer
+    footer()
+
 def page_book():
     st.title("預約 30 分鐘線上會談")
     st.info("（正式版可嵌入 Calendly / Google 日曆 iframe）")
@@ -246,6 +270,9 @@ def page_book():
         if st.form_submit_button("送出預約申請"):
             st.success("已收到預約申請，我們將盡快與您聯繫。")
 
+    # Footer
+    footer()
+
 def page_advisors():
     st.title("顧問專區（MVP）")
     st.write("先上線最小功能，驗證註冊意願。正式版會加入白標報告與授權方案。")
@@ -256,6 +283,9 @@ def page_advisors():
         brand = st.text_input("希望顯示於報告的顧問品牌名稱")
         if st.form_submit_button("建立帳號（示意）"):
             st.success("註冊成功（示意）。正式版將儲存資料並寄出歡迎信。")
+
+    # Footer
+    footer()
 
 def page_plans():
     st.title("授權與高階會員方案（合規）")
@@ -278,35 +308,7 @@ def page_plans():
         )
     st.caption("合規：平台僅收授權與專業服務費，不參與佣金分配或分潤。")
 
-def page_privacy():
-    st.title("隱私與免責聲明")
-    st.write(
-        "- 我們重視您的個人資料保護，僅在提供服務之目的範圍內蒐集與使用。  \n"
-        "- 您可要求查詢、更正或刪除個人資料，詳情請與我們聯繫。  \n"
-        "- 本平台之計算結果與建議僅供初步規劃參考，實際方案須由專業顧問複核與法令許可範圍內執行。"
-    )
+    # Footer
+    footer()
 
-# ========== 側邊欄導航 ==========
-st.sidebar.header("功能選單")
-page = st.sidebar.radio(
-    "選擇頁面",
-    ("首頁", "診斷", "結果", "預約", "顧問", "方案", "隱私"),
-    index=("首頁","診斷","結果","預約","顧問","方案","隱私").index(st.session_state.page)
-)
-st.session_state.page = page
-
-# ========== 路由 ==========
-if page == "首頁":
-    page_home()
-elif page == "診斷":
-    page_diagnostic()
-elif page == "結果":
-    page_result()
-elif page == "預約":
-    page_book()
-elif page == "顧問":
-    page_advisors()
-elif page == "方案":
-    page_plans()
-else:
-    page_privacy()
+def pa
