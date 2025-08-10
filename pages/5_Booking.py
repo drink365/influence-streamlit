@@ -8,18 +8,7 @@ from src.config import SMTP
 
 st.title("預約 30 分鐘線上會談")
 
-# --- 固定嵌入：Google 日曆（以公司帳號 123@gracefo.com）---
-GCAL_IFRAME_SRC = "https://calendar.google.com/calendar/embed?src=123%40gracefo.com&ctz=Asia%2FTaipei"
-st.caption("您可以直接在下方日曆中選擇適合的時段（Google 日曆）")
-st.components.v1.iframe(
-    src=GCAL_IFRAME_SRC,
-    width=800,
-    height=600,
-    scrolling=False
-)
-
-st.divider()
-st.subheader("或留下您的聯絡方式，我們會回覆您：")
+# ✅ 已移除：任何 Google Calendar / Calendly 內嵌，避免暴露可用時段
 
 repo = BookingRepo()
 
@@ -39,10 +28,8 @@ def show_success_view():
         if payload.get("ts"):
             st.caption(f"提交時間（UTC）：{payload['ts']}")
     st.divider()
-    c1, _ = st.columns(2)
-    with c1:
-        if st.button("回首頁", use_container_width=True):
-            st.switch_page("app.py")
+    if st.button("回首頁", use_container_width=True):
+        st.switch_page("app.py")
 
 if st.session_state.booking_success:
     show_success_view()
@@ -50,12 +37,14 @@ if st.session_state.booking_success:
     st.stop()
 
 # ---- 表單（提交即處理；成功後切換到成功畫面）----
+st.subheader("留下您的聯絡方式，我們會回覆您：")
 with st.form("book_form", clear_on_submit=False):
     name = st.text_input("姓名 *")
     phone = st.text_input("手機 *")
     email = st.text_input("Email *")
     notes = st.text_area("想先告訴我們的情況（選填）")
 
+    # 必填檢查（沒填完就停用）
     disabled = not (name.strip() and phone.strip() and email.strip())
     submit = st.form_submit_button("送出預約申請", disabled=disabled, use_container_width=True)
 
@@ -68,67 +57,73 @@ with st.form("book_form", clear_on_submit=False):
         if errors:
             st.error("請完成必填欄位或修正格式： " + "、".join(errors))
         else:
-            ts = utc_now_iso()
+            with st.spinner("正在送出…"):
+                ts = utc_now_iso()
 
-            # 2) 先寫入 CSV（一定會做）
-            repo.add({
-                "ts": ts,
-                "name": name.strip(),
-                "phone": phone.strip(),
-                "email": email.strip(),
-                "notes": (notes or "").strip(),
-                "status": "submitted",
-            })
-
-            # 3) 嘗試寄信（SMTP 沒設好不報錯中斷）
-            user_subject = "已收到您的預約申請｜永傳家族辦公室"
-            user_html = f"""
-                <p>{name} 您好，</p>
-                <p>已收到您的 30 分鐘線上會談預約申請，我們將盡快與您聯繫。</p>
-                <ul>
-                  <li>時間：收到申請（UTC）{ts}</li>
-                  <li>手機：{phone}</li>
-                  <li>Email：{email}</li>
-                </ul>
-                <p>若您有補充資訊，歡迎直接回覆此信。</p>
-                <p>— 永傳家族辦公室</p>
-            """
-            user_text = (
-                f"{name} 您好：\n\n已收到您的 30 分鐘線上會談預約申請，我們將盡快與您聯繫。\n"
-                f"- 時間（UTC）：{ts}\n- 手機：{phone}\n- Email：{email}\n\n"
-                "若您有補充資訊，歡迎直接回覆此信。\n— 永傳家族辦公室"
-            )
-            ok_user, _ = (False, None)
-            try:
-                ok_user, _ = send_email(email.strip(), user_subject, user_html, user_text)
-            except Exception:
-                pass  # 寄信失敗不阻斷
-
-            admin_to = SMTP.get("to_admin")
-            if admin_to:
-                admin_subject = "【新預約】30 分鐘會談申請"
-                admin_html = f"""
-                    <p>收到新的預約申請：</p>
-                    <ul>
-                      <li>時間（UTC）：{ts}</li>
-                      <li>姓名：{name}</li>
-                      <li>手機：{phone}</li>
-                      <li>Email：{email}</li>
-                      <li>備註：{(notes or '（無）')}</li>
-                    </ul>
-                """
-                admin_text = (
-                    f"收到新的預約申請：\n"
-                    f"- 時間（UTC）：{ts}\n- 姓名：{name}\n- 手機：{phone}\n- Email：{email}\n- 備註：{(notes or '（無）')}\n"
-                )
+                # 2) 一定先寫入 CSV（若出錯會提示）
                 try:
-                    send_email(admin_to, admin_subject, admin_html, admin_text)
-                except Exception:
-                    pass  # 管理者信失敗不阻斷
+                    repo.add({
+                        "ts": ts,
+                        "name": name.strip(),
+                        "phone": phone.strip(),
+                        "email": email.strip(),
+                        "notes": (notes or "").strip(),
+                        "status": "submitted",
+                    })
+                    wrote_ok = True
+                except Exception as e:
+                    wrote_ok = False
+                    st.error(f"寫入預約資料時發生錯誤：{e}")
 
-            # 4) 切換成功畫面
-            st.session_state.booking_success = True
-            st.session_state.booking_payload = {"ts": ts, "name": name, "phone": phone, "email": email}
-            st.experimental_rerun()
+                # 3) 寄信（寫檔成功才嘗試；SMTP 設定不完整也不會中斷）
+                if wrote_ok:
+                    user_subject = "已收到您的預約申請｜永傳家族辦公室"
+                    user_html = f"""
+                        <p>{name} 您好，</p>
+                        <p>已收到您的 30 分鐘線上會談預約申請，我們將盡快與您聯繫。</p>
+                        <ul>
+                          <li>時間：收到申請（UTC）{ts}</li>
+                          <li>手機：{phone}</li>
+                          <li>Email：{email}</li>
+                        </ul>
+                        <p>若您有補充資訊，歡迎直接回覆此信。</p>
+                        <p>— 永傳家族辦公室</p>
+                    """
+                    user_text = (
+                        f"{name} 您好：\n\n已收到您的 30 分鐘線上會談預約申請，我們將盡快與您聯繫。\n"
+                        f"- 時間（UTC）：{ts}\n- 手機：{phone}\n- Email：{email}\n\n"
+                        "若您有補充資訊，歡迎直接回覆此信。\n— 永傳家族辦公室"
+                    )
+                    try:
+                        send_email(email.strip(), user_subject, user_html, user_text)
+                    except Exception:
+                        pass  # 寄信失敗不阻斷
+
+                    admin_to = SMTP.get("to_admin")
+                    if admin_to:
+                        admin_subject = "【新預約】30 分鐘會談申請"
+                        admin_html = f"""
+                            <p>收到新的預約申請：</p>
+                            <ul>
+                              <li>時間（UTC）：{ts}</li>
+                              <li>姓名：{name}</li>
+                              <li>手機：{phone}</li>
+                              <li>Email：{email}</li>
+                              <li>備註：{(notes or '（無）')}</li>
+                            </ul>
+                        """
+                        admin_text = (
+                            f"收到新的預約申請：\n"
+                            f"- 時間（UTC）：{ts}\n- 姓名：{name}\n- 手機：{phone}\n- Email：{email}\n- 備註：{(notes or '（無）')}\n"
+                        )
+                        try:
+                            send_email(admin_to, admin_subject, admin_html, admin_text)
+                        except Exception:
+                            pass
+
+                    # 4) 切換成功畫面（避免重送）
+                    st.session_state.booking_success = True
+                    st.session_state.booking_payload = {"ts": ts, "name": name, "phone": phone, "email": email}
+                    st.rerun()
 
 footer()
