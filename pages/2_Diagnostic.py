@@ -1,5 +1,8 @@
 import streamlit as st
 import uuid
+from src.ui.theme import inject_css
+inject_css()
+
 from src.ui.footer import footer
 from src.repos.cases import CaseRepo
 from src.utils import utc_now_iso
