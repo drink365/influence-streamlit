@@ -1,40 +1,128 @@
 import streamlit as st
-import uuid
+import pandas as pd
+from io import BytesIO
 from datetime import datetime
+import uuid
+from pathlib import Path
+from docx import Document
+from docx.shared import Pt
 
 # ========== 基本設定 ==========
 st.set_page_config(page_title="影響力平台", page_icon="✨", layout="wide")
 
-# 全域狀態（簡易 in-memory，先驗證動線）
+DATA_DIR = Path("data")
+DATA_DIR.mkdir(parents=True, exist_ok=True)
+CASES_CSV = DATA_DIR / "cases.csv"
+
+# 初始化狀態
 if "cases" not in st.session_state:
     st.session_state.cases = {}
 if "last_case_id" not in st.session_state:
     st.session_state.last_case_id = ""
+if "page" not in st.session_state:
+    st.session_state.page = "首頁"
 
-# ========== 頁面函式 ==========
+# ========== 工具函式 ==========
+def save_case_to_csv(case_id: str, payload: dict):
+    df_new = pd.DataFrame([{**payload, "case_id": case_id}])
+    if CASES_CSV.exists():
+        df_old = pd.read_csv(CASES_CSV)
+        df_all = pd.concat([df_old, df_new], ignore_index=True)
+    else:
+        df_all = df_new
+    df_all.to_csv(CASES_CSV, index=False)
+
+def load_case_from_csv(case_id: str):
+    if not CASES_CSV.exists():
+        return None
+    df = pd.read_csv(CASES_CSV)
+    m = df[df["case_id"] == case_id]
+    if m.empty:
+        return None
+    row = m.iloc[-1].to_dict()
+    # 轉成整數/清單
+    for k in ["equity","real_estate","financial","insurance_cov","total_assets","liq_low","liq_high","gap_low","gap_high","children"]:
+        if k in row and pd.notna(row[k]):
+            row[k] = int(row[k])
+    if "focus" in row and isinstance(row["focus"], str):
+        row["focus"] = [s for s in row["focus"].split("|") if s]
+    return row
+
+def make_docx_report(case_id: str, case: dict) -> bytes:
+    doc = Document()
+    styles = doc.styles['Normal']
+    styles.font.name = 'Microsoft JhengHei'
+    styles.font.size = Pt(11)
+
+    doc.add_heading("影響力平台｜傳承規劃簡版報告", level=1)
+    doc.add_paragraph(f"個案編號：{case_id}")
+    doc.add_paragraph(f"建立時間：{datetime.utcnow().strftime('%Y-%m-%d %H:%M UTC')}")
+
+    doc.add_heading("一、基本資料", level=2)
+    p = doc.add_paragraph()
+    p.add_run(f"申請人：{case.get('name') or '（未填）'}　")
+    p.add_run(f"婚姻：{case.get('marital','')}　子女：{case.get('children','')}　")
+    p.add_run(f"特殊照顧對象：{case.get('special','')}")
+
+    doc.add_heading("二、資產概況（估）", level=2)
+    doc.add_paragraph(f"- 公司股權：{case['equity']:,} 萬")
+    doc.add_paragraph(f"- 不動產：{case['real_estate']:,} 萬")
+    doc.add_paragraph(f"- 金融資產：{case['financial']:,} 萬")
+    doc.add_paragraph(f"- 既有保單保額：{case['insurance_cov']:,} 萬")
+    doc.add_paragraph(f"- 資產總額（估）：{case['total_assets']:,} 萬")
+
+    doc.add_heading("三、交棒流動性與保障缺口（示意）", level=2)
+    doc.add_paragraph(f"- 交棒流動性需求（估）：{case['liq_low']:,} – {case['liq_high']:,} 萬")
+    doc.add_paragraph(f"- 可能的保障缺口：{case['gap_low']:,} – {case['gap_high']:,} 萬")
+
+    doc.add_heading("四、您的重點關注", level=2)
+    focuses = case.get("focus") or []
+    if focuses:
+        for f in focuses:
+            doc.add_paragraph(f"• {f}")
+    else:
+        doc.add_paragraph("（未填）")
+
+    doc.add_heading("五、初步建議（草案）", level=2)
+    bullets = [
+        "以保單建立緊急流動性池，避免交棒時資金壓力。",
+        "評估是否需要信託來管理特殊照顧對象或特定資產的分配節奏。",
+        "針對股權與不動產，規劃適當的傳承順序與治理安排。",
+        "視需要規劃遺囑，確保意願清楚、減少爭議。",
+    ]
+    for b in bullets:
+        doc.add_paragraph(f"• {b}")
+
+    doc.add_paragraph("\n免責聲明：本報告內容為初步示意，實際方案須由專業顧問複核並依相關法令辦理。")
+
+    bio = BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
+
+# ========== 頁面 ==========
 def page_home():
     st.title("傳承您的影響力")
     st.write("AI 智慧 + 專業顧問，打造專屬的可視化傳承方案，確保財富與愛同時流傳。")
 
-    col1, col2, col3 = st.columns(3)
-    with col1:
+    c1, c2, c3 = st.columns(3)
+    with c1:
         st.markdown("### 家族資產地圖\n將股權、不動產、保單、金融資產一次整理")
-    with col2:
+    with c2:
         st.markdown("### AI 傳承策略\n根據家族偏好與資料生成個人化方案")
-    with col3:
+    with c3:
         st.markdown("### 行動計劃表\n明確列出下一步與時間表，陪伴落地")
 
     st.divider()
     st.subheader("立即行動")
-    c1, c2 = st.columns(2)
-    with c1:
+    a, b = st.columns(2)
+    with a:
         if st.button("開始規劃（免費）", use_container_width=True):
-            st.session_state._page = "診斷"
-            st.experimental_rerun()
-    with c2:
+            st.session_state.page = "診斷"
+            st.rerun()
+    with b:
         if st.button("預約 30 分鐘諮詢", use_container_width=True):
-            st.session_state._page = "預約"
-            st.experimental_rerun()
+            st.session_state.page = "預約"
+            st.rerun()
 
     st.caption("免責：本平台提供之計算與建議僅供初步規劃參考，請依專業顧問複核與相關法令為準。")
 
@@ -74,46 +162,39 @@ def page_diagnostic():
         if submitted:
             case_id = "YC-" + uuid.uuid4().hex[:6].upper()
             total_assets = equity + real_estate + financial
-
-            # MVP 版簡化：以總資產的 10%~20% 作為交棒流動性需求
             liq_low = round(total_assets * 0.10)
             liq_high = round(total_assets * 0.20)
             gap_low = max(0, liq_low - insurance_cov)
             gap_high = max(0, liq_high - insurance_cov)
 
-            st.session_state.cases[case_id] = {
+            payload = {
                 "ts": datetime.utcnow().isoformat(),
-                "name": name,
-                "mobile": mobile,
-                "email": email,
-                "marital": marital,
-                "children": int(children),
-                "special": special,
-                "equity": int(equity),
-                "real_estate": int(real_estate),
-                "financial": int(financial),
+                "name": name, "mobile": mobile, "email": email,
+                "marital": marital, "children": int(children), "special": special,
+                "equity": int(equity), "real_estate": int(real_estate), "financial": int(financial),
                 "insurance_cov": int(insurance_cov),
-                "focus": focus,
+                "focus": "|".join(focus),
                 "total_assets": int(total_assets),
-                "liq_low": int(liq_low),
-                "liq_high": int(liq_high),
-                "gap_low": int(gap_low),
-                "gap_high": int(gap_high),
+                "liq_low": int(liq_low), "liq_high": int(liq_high),
+                "gap_low": int(gap_low), "gap_high": int(gap_high),
             }
+
+            # 寫入 session 與 CSV
+            st.session_state.cases[case_id] = {**payload, "focus": focus}
+            save_case_to_csv(case_id, payload)
+
             st.session_state.last_case_id = case_id
             st.success(f"已建立個案：{case_id}")
             if st.button("查看診斷結果 ➜"):
-                st.session_state._page = "結果"
-                st.experimental_rerun()
+                st.session_state.page = "結果"
+                st.rerun()
 
 def page_result():
     st.title("診斷結果（簡版）")
-
     case_id = st.text_input("輸入 CaseID 查詢", value=st.session_state.get("last_case_id", ""))
-    if st.button("載入"):
-        pass  # 僅刷新畫面
 
-    case = st.session_state.cases.get(case_id)
+    # 先從記憶體拿；沒有就從 CSV 載
+    case = st.session_state.cases.get(case_id) or load_case_from_csv(case_id)
     if not case:
         st.info("尚無資料。請先完成『快速診斷』產生 CaseID。")
         return
@@ -138,14 +219,21 @@ def page_result():
     for b in bullets:
         st.write(f"- {b}")
 
-    st.subheader("三、下一步")
+    st.subheader("三、動作與下載")
     c1, c2 = st.columns(2)
-    if c1.button("預約 30 分鐘諮詢"):
-        st.session_state._page = "預約"
-        st.experimental_rerun()
-    if c2.button("查看顧問方案"):
-        st.session_state._page = "方案"
-        st.experimental_rerun()
+    with c1:
+        if st.button("預約 30 分鐘諮詢"):
+            st.session_state.page = "預約"
+            st.rerun()
+    with c2:
+        docx_bytes = make_docx_report(case_id, case)
+        st.download_button(
+            label="下載簡版報告（.docx）",
+            data=docx_bytes,
+            file_name=f"{case_id}_report.docx",
+            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+            use_container_width=True
+        )
 
 def page_book():
     st.title("預約 30 分鐘線上會談")
@@ -203,9 +291,9 @@ st.sidebar.header("功能選單")
 page = st.sidebar.radio(
     "選擇頁面",
     ("首頁", "診斷", "結果", "預約", "顧問", "方案", "隱私"),
-    index={"首頁":0, "診斷":1, "結果":2, "預約":3, "顧問":4, "方案":5, "隱私":6}[st.session_state.get("_page", "首頁")]
+    index=("首頁","診斷","結果","預約","顧問","方案","隱私").index(st.session_state.page)
 )
-st.session_state._page = page
+st.session_state.page = page
 
 # ========== 路由 ==========
 if page == "首頁":
