@@ -51,7 +51,7 @@ st.info("請留下您的聯絡方式與需求（四項皆為必填），我們�
 with st.form("book_form", clear_on_submit=False):
     name    = st.text_input("姓名 *", placeholder="請輸入姓名")
     email   = st.text_input("Email *", placeholder="name@example.com")
-    phone   = st.text_input("手機 *", placeholder="+886 9xx xxx xxx")
+    phone   = st.text_input("手機 *", placeholder="09xx xxx xxx")
     request = st.text_area("需求（請簡述想討論的主題）*", placeholder="請至少輸入 10 個字說明您的需求")
 
     submit = st.form_submit_button("送出預約申請", use_container_width=True)
