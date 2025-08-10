@@ -8,17 +8,25 @@ from src.services.reports_pdf import build_pdf_report
 from src.services.charts import tax_breakdown_bar, asset_pie, savings_compare_bar, simple_sankey
 from src.domain.tax_loader import load_tax_constants
 from src.domain.tax_rules import EstateTaxCalculator
+from src.services.billing import try_unlock_full_report, reward_won, balance, REPORT_FULL_COST
 
 st.set_page_config(page_title="結果", page_icon="📄", layout="wide")
 
-st.title("📄 診斷結果與報告")
+st.title("📄 診斷結果與報告（含點數解鎖）")
 case_id = st.text_input("輸入案件碼 Case ID", placeholder="CASE-20250810-ABCD")
+
+advisor_id = st.session_state.get("advisor_id", "guest")
+advisor_name = st.session_state.get("advisor_name", "未登入")
 
 if case_id:
     case = CaseRepo.get(case_id)
     if not case:
         st.error("查無案件，請確認案件碼是否正確。")
         st.stop()
+
+    col0 = st.columns(3)
+    col0[0].metric("我的點數", balance(advisor_id))
+    col0[1].metric("顧問", advisor_name)
 
     col = st.columns(3)
     col[0].metric("淨遺產（元）", f"{case['net_estate']:,.0f}")
@@ -48,7 +56,6 @@ if case_id:
     c1, c2 = st.columns(2)
 
     with c1:
-        # 若沒有 taxable_base_wan，回推
         if taxable_base_wan is None:
             constants = load_tax_constants(on_date=date.today())
             calc = EstateTaxCalculator(constants)
@@ -91,22 +98,32 @@ if case_id:
 
     st.divider()
     st.markdown("### 檢視報告（簡/全）")
-    st.info("完整版 PDF/DOCX 需解鎖。若環境無 WeasyPrint，系統會退回提供 HTML 下載。")
+    st.info(f"完整版 PDF/DOCX 需解鎖：每次 {REPORT_FULL_COST} 點。管理碼仍可免費解鎖（內部使用）。")
 
-    tabs = st.tabs(["A. 管理碼解鎖","B. 成交回報解鎖（推薦）"])
+    tabs = st.tabs(["A. 使用點數解鎖（顧問）","B. 管理碼解鎖（內部）","C. 成交回報解鎖（回饋點）"])
 
     def _download_full_reports(current_case):
-        # 產生 PDF（或 HTML）
         path = build_pdf_report(current_case)
         label = "⬇️ 下載 PDF（完整版）" if path.suffix.lower() == ".pdf" else "⬇️ 下載 HTML（完整版）"
         with open(path, "rb") as f:
             st.download_button(label, data=f, file_name=path.name)
-        # 產生 DOCX（維持相容）
         fname = generate_docx(current_case, full=True)
         with open(f"data/reports/{fname}", "rb") as f:
             st.download_button("⬇️ 下載 DOCX（完整版）", data=f, file_name=fname)
 
     with tabs[0]:
+        if st.button(f"使用 {REPORT_FULL_COST} 點解鎖並下載", type="primary"):
+            ok, msg = try_unlock_full_report(advisor_id, case_id)
+            if ok:
+                EventRepo.log(case_id, "REPORT_UNLOCKED", {"by":"credits"})
+                st.success(msg)
+                _download_full_reports(case)
+            else:
+                st.error(msg)
+                st.caption("前往顧問 Dashboard → 測試儲值加點。")
+                st.page_link("pages/8_Advisor_Dashboard.py", label="➡️ 顧問 Dashboard", icon="🧭")
+
+    with tabs[1]:
         admin_key = st.text_input("管理碼", type="password")
         if st.button("用管理碼解鎖"):
             if admin_key and admin_key == st.secrets.get("ADMIN_KEY", ""):
@@ -116,8 +133,8 @@ if case_id:
             else:
                 st.error("管理碼不正確。")
 
-    with tabs[1]:
-        st.caption("完成成交回報即可解鎖完整版報告，並回饋顧問點數（可設定）。")
+    with tabs[2]:
+        st.caption("完成成交回報即可解鎖完整版報告，並回饋點數（預設 +5）。")
         with st.form("won_form"):
             product = st.selectbox("產品別", ["壽險","年金","醫療","投資型","其他"])
             premium = st.number_input("年繳保費（元）", min_value=0.0, step=10000.0, format="%.0f")
@@ -126,5 +143,6 @@ if case_id:
         if submitted:
             CaseRepo.update_status(case_id, "Won")
             EventRepo.log(case_id, "WON_REPORTED", {"product": product, "premium": premium, "remark": remark})
-            st.success("謝謝回報！已解鎖完整版報告。")
+            reward_won(advisor_id, case_id, premium)
+            st.success("謝謝回報！已回饋點數並解鎖完整版報告。")
             _download_full_reports(case)
