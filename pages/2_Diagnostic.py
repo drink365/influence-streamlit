@@ -66,7 +66,6 @@ with c_reset:
     if st.button("🧹 清除本次填寫", use_container_width=True):
         for k, v in defaults.items():
             st.session_state[k] = v
-        # 這兩個旗標若存在會導致自動跳頁，所以一併清掉
         st.session_state.pop("__go_result_case", None)
         st.session_state.pop("last_case_id", None)
         st.rerun()
@@ -103,8 +102,7 @@ st.markdown('<div class="yc-step"><div class="yc-dot">3</div><div>重點關注</
 st.multiselect(
     "請選擇最多 3 項您最在意的議題",
     options=["節稅安排","現金流穩定","股權交棒","家族治理","風險隔離","資產隔代傳承","慈善安排","文件與合規"],
-    key="diag_focus",
-    default=st.session_state["diag_focus"],
+    key="diag_focus",           # 只用 key 控制；不要再給 default=
     max_selections=3,
 )
 st.slider("希望在幾年內完成主要傳承安排？", 1, 10, key="diag_years")
