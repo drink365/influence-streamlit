@@ -1,11 +1,10 @@
-# pages/3_Result.py
 import streamlit as st, json
 from datetime import date
 
 from src.repos.case_repo import CaseRepo
 from src.repos.event_repo import EventRepo
 from src.services.reports import generate_docx
-from src.services.charts import tax_breakdown_bar, asset_pie
+from src.services.charts import tax_breakdown_bar, asset_pie, savings_compare_bar, simple_sankey
 from src.domain.tax_loader import load_tax_constants
 from src.domain.tax_rules import EstateTaxCalculator
 
@@ -25,7 +24,6 @@ if case_id:
     col[1].metric("估算稅額（元）", f"{case['tax_estimate']:,.0f}")
     col[2].metric("建議預留稅源（元）", f"{case['liquidity_needed']:,.0f}")
 
-    # 取 payload
     payload = {}
     try:
         payload = json.loads(case.get("plan_json") or case.get("payload_json") or "{}")
@@ -41,6 +39,7 @@ if case_id:
     assets_fin = case.get("assets_financial", 0.0)
     assets_re  = case.get("assets_realestate", 0.0)
     assets_biz = case.get("assets_business", 0.0)
+    total_assets = (payload.get("assets_total") if isinstance(payload, dict) else None) or (assets_fin + assets_re + assets_biz)
 
     st.divider()
     st.markdown("### 視覺化總覽")
@@ -48,11 +47,10 @@ if case_id:
     c1, c2 = st.columns(2)
 
     with c1:
-        # ✅ 小補丁B：舊案若沒有 taxable_base_wan，就用可回推邏輯估算
+        # 若沒有 taxable_base_wan，回推
         if taxable_base_wan is None:
             constants = load_tax_constants(on_date=date.today())
             calc = EstateTaxCalculator(constants)
-            # 估算：以 payload.params 裡的扣除參數，將 net_estate 轉萬後回推基礎
             params = (payload.get("params") or {})
             has_spouse = bool(params.get("has_spouse", False))
             adult_children = int(params.get("adult_children", 0))
@@ -60,9 +58,7 @@ if case_id:
             disabled_people = int(params.get("disabled_people", 0))
             other_dependents = int(params.get("other_dependents", 0))
             net_wan = float(case["net_estate"]) / constants.UNIT_FACTOR
-            ded_wan = calc.compute_total_deductions_wan(
-                has_spouse, adult_children, parents, disabled_people, other_dependents
-            )
+            ded_wan = calc.compute_total_deductions_wan(has_spouse, adult_children, parents, disabled_people, other_dependents)
             taxable_base_wan = calc.compute_taxable_base_wan(net_wan, ded_wan)
 
         st.caption("各級距稅額拆解（依當前稅制）")
@@ -73,6 +69,24 @@ if case_id:
         st.caption("資產結構（金融 / 不動產 / 公司股權）")
         fig2 = asset_pie(assets_fin, assets_re, assets_biz)
         st.pyplot(fig2, use_container_width=True)
+
+    # === 策略模擬區（不宣稱減稅，以資金缺口對比表述） ===
+    st.divider()
+    st.markdown("### 策略模擬（資金缺口對比）")
+    reserve_default = float(case.get("liquidity_needed", 0.0))
+    reserve = st.number_input("方案預留稅源（元）", min_value=0.0, step=100000.0, format="%.0f", value=reserve_default)
+
+    cc1, cc2 = st.columns(2)
+    with cc1:
+        fig3 = savings_compare_bar(float(case['tax_estimate']), reserve)
+        st.pyplot(fig3, use_container_width=True)
+    with cc2:
+        fig4 = simple_sankey(total_assets, float(case['tax_estimate']), reserve)
+        st.pyplot(fig4, use_container_width=True)
+
+    if st.button("記錄此次策略模擬"):
+        EventRepo.log(case_id, "STRATEGY_SIMULATED", {"reserve": reserve, "tax": float(case['tax_estimate'])})
+        st.toast("已記錄策略模擬", icon="✅")
 
     st.divider()
     st.markdown("### 檢視報告（簡版）")
