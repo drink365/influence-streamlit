@@ -1,4 +1,7 @@
 import streamlit as st
+from src.ui.theme import inject_css
+inject_css()
+
 from src.ui.footer import footer
 from src.repos.cases import CaseRepo
 from src.services.reports import build_docx, build_txt
