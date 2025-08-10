@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang="zh-Hant">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>{{ title }}</title>
+  <style>
+    body { font-family: -apple-system, BlinkMacSystemFont, "Noto Sans TC", "Segoe UI", Roboto, Arial, sans-serif; margin: 32px; color: #222; }
+    h1 { font-size: 28px; margin: 0 0 12px; }
+    h2 { font-size: 20px; margin: 24px 0 8px; border-bottom: 1px solid #eee; padding-bottom: 4px; }
+    .meta { color: #666; font-size: 12px; margin-bottom: 20px; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+    .card { border: 1px solid #eee; border-radius: 8px; padding: 12px; }
+    .kpi { font-size: 14px; line-height: 1.6; }
+    .kpi strong { font-size: 18px; }
+    img { max-width: 100%; display: block; }
+    ul { margin: 8px 0 0 18px; }
+    .footer { margin-top: 24px; font-size: 11px; color: #777; }
+  </style>
+</head>
+<body>
+  <h1>{{ title }}</h1>
+  <div class="meta">案件碼：{{ case_id }} ｜ 客戶：{{ client_alias }} ｜ 產生日期：{{ date_str }}</div>
+
+  <div class="grid">
+    <div class="card kpi">
+      淨遺產（元）<br><strong>{{ net_estate }}</strong>
+    </div>
+    <div class="card kpi">
+      估算稅額（元）<br><strong>{{ tax_estimate }}</strong>
+    </div>
+    <div class="card kpi">
+      建議預留稅源（元）<br><strong>{{ liquidity_needed }}</strong>
+    </div>
+    <div class="card kpi">
+      稅則版本 ｜ 課稅基礎（萬）<br><strong>{{ rules_version }} ｜ {{ taxable_base_wan }}</strong>
+    </div>
+  </div>
+
+  <h2>視覺化摘要</h2>
+  <div class="grid">
+    <div class="card">
+      <div>各級距稅額拆解（萬元）</div>
+      <img src="{{ img_tax }}" alt="tax breakdown"/>
+    </div>
+    <div class="card">
+      <div>資產結構（佔比）</div>
+      <img src="{{ img_asset }}" alt="asset pie"/>
+    </div>
+  </div>
+
+  <h2>重要說明</h2>
+  <ul>
+    {% for n in notes %}
+    <li>{{ n }}</li>
+    {% endfor %}
+  </ul>
+
+  <div class="footer">© 永傳家族辦公室｜本報告僅供內部規劃參考，不構成投資或保險建議。</div>
+</body>
+</html>
