@@ -47,6 +47,8 @@ st.markdown("""
               background:rgba(168,135,22,0.14); color:#A88716; font-size:12px; font-weight:700;
               border:1px solid rgba(168,135,22,0.27); }
   .metric { background:#FAFAFB; border:1px dashed #E5E7EB; padding:10px 12px; border-radius:12px;}
+  .ck-cols { display:grid; grid-template-columns: repeat(2, minmax(0,1fr)); gap:8px 18px; }
+  @media (max-width: 900px){ .ck-cols { grid-template-columns: 1fr; } }
 </style>
 """, unsafe_allow_html=True)
 
@@ -66,7 +68,15 @@ defaults = {
     "diag_securities": 0,
     "diag_other": 0,
     "diag_insurance_cov": 0,
-    "diag_focus": [],            # 多選：list[str]
+    # checkbox 用：為每個選項保留一個布林鍵
+    "ck_交棒流動性需求": False,
+    "ck_節稅影響": False,
+    "ck_資產配置": False,
+    "ck_保障缺口": False,
+    "ck_股權規劃": False,
+    "ck_不動產分配": False,
+    "ck_慈善安排": False,
+    "ck_現金流穩定": False,
     "diag_name": "",
     "diag_email": "",
     "diag_mobile": "",
@@ -74,6 +84,12 @@ defaults = {
 for k, v in defaults.items():
     if k not in st.session_state:
         st.session_state[k] = v
+
+# 為了相容舊資料結構（若之前有用到 diag_focus / diag_focus_list）
+if "diag_focus" not in st.session_state:
+    st.session_state["diag_focus"] = []
+if "diag_focus_list" not in st.session_state:
+    st.session_state["diag_focus_list"] = []
 
 # ---------- Hero ----------
 st.markdown('<div class="yc-hero">', unsafe_allow_html=True)
@@ -98,7 +114,7 @@ with st.form("diag_form", clear_on_submit=False):
         st.number_input("其他資產（萬元）", min_value=0, step=10, key="diag_other")
         st.number_input("既有保單保額（萬元）", min_value=0, step=10, key="diag_insurance_cov")
 
-    # 即時計算（在 form 內也可以即時顯示）
+    # 即時計算
     total_assets = (
         st.session_state.diag_equity
         + st.session_state.diag_realestate
@@ -116,19 +132,21 @@ with st.form("diag_form", clear_on_submit=False):
 
     st.markdown("---")
 
-    # 2) 重點關注（多選勾選）
-    focus_options = [
-        "交棒流動性需求", "節稅影響", "資產配置", "保障缺口",
-        "股權規劃", "不動產分配", "慈善安排", "現金流穩定"
-    ]
+    # 2) 重點關注（用 checkbox 群組）
     st.write("**您的重點關注（可複選）**")
-    diag_focus = st.multiselect(
-        "請勾選您的重點關注（可複選）",
-        options=focus_options,
-        default=st.session_state.diag_focus,
-        key="diag_focus",
-        help="可同時勾選多個重點，以便我們在結果頁提供更貼近需求的建議。"
-    )
+    options = ["交棒流動性需求","節稅影響","資產配置","保障缺口","股權規劃","不動產分配","慈善安排","現金流穩定"]
+
+    # 兩欄排版的 checkbox
+    col_a, col_b = st.columns(2)
+    for i, label in enumerate(options):
+        key = f"ck_{label}"
+        target_col = col_a if i % 2 == 0 else col_b
+        with target_col:
+            st.checkbox(label, key=key)
+
+    # 將勾選轉為 list 與字串（供提交使用）
+    focus_list = [label for label in options if st.session_state.get(f"ck_{label}", False)]
+    focus_str = "、".join(focus_list)
 
     st.markdown("---")
 
@@ -158,10 +176,6 @@ if submitted and not missing:
     uid = str(uuid.uuid4())[:8].upper()
     case_id = f"CASE-{datetime.now(TPE).strftime('%Y%m%d')}-{uid}"
 
-    # 整理資料
-    focus_list = st.session_state.diag_focus or []
-    focus_str = "、".join(focus_list)
-
     case_dict = {
         "case_id": case_id,
         "ts": ts_local,
@@ -175,9 +189,9 @@ if submitted and not missing:
         "other_assets": st.session_state.diag_other,
         "insurance_coverage": st.session_state.diag_insurance_cov,
         "total_assets": total_assets,
-        "liq_need": liq_need,             # 單一數字（總資產×20%）
-        "focus": focus_str,               # 儲存為逗號樣式（實際用的是頓號）
-        "focus_list": focus_list,         # 也留原始 list（給結果頁用）
+        "liq_need": liq_need,       # 單一數字（總資產×20%）
+        "focus": focus_str,         # 以頓號連接的字串
+        "focus_list": focus_list,   # 原始 list（給結果頁細分使用）
     }
 
     # 放到 Session，供第 3 頁用
