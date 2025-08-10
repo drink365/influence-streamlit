@@ -3,10 +3,12 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 import smtplib, ssl
 from email.message import EmailMessage
+import uuid
 import streamlit as st
 
 from src.ui.footer import footer
 from src.ui.theme import inject_css
+from src.repos.bookings import BookingsRepo, Booking
 
 st.set_page_config(page_title="預約會談", page_icon="📅", layout="wide")
 inject_css()
@@ -119,18 +121,37 @@ def send_mail(subject: str, html_body: str):
             server.send_message(msg)
 
 if submit and not missing:
-    ts = datetime.now(TPE).strftime("%Y-%m-%d %H:%M:%S %Z")
-    case_id = st.session_state["booking_case_id"].strip()
-    name   = st.session_state["booking_name"].strip()
-    email  = st.session_state["booking_email"].strip()
-    mobile = st.session_state["booking_mobile"].strip()
-    when   = st.session_state["booking_time"].strip() or "（使用者未填）"
-    need   = st.session_state["booking_need"].strip()
+    ts_local = datetime.now(TPE).strftime("%Y-%m-%d %H:%M:%S %Z")
+    # 產生 booking_id
+    uid = str(uuid.uuid4())[:8].upper()
+    booking_id = f"BOOK-{datetime.now(TPE).strftime('%Y%m%d')}-{uid}"
 
-    # 給顧問的通知信（含個案編號）
+    case_id = st.session_state["booking_case_id"].strip()
+    name    = st.session_state["booking_name"].strip()
+    email   = st.session_state["booking_email"].strip()
+    mobile  = st.session_state["booking_mobile"].strip()
+    when    = st.session_state["booking_time"].strip() or "（使用者未填）"
+    need    = st.session_state["booking_need"].strip()
+
+    # 1) 寫入 CSV
+    repo = BookingsRepo()
+    repo.add(Booking(
+        booking_id=booking_id,
+        ts=ts_local,
+        case_id=case_id,
+        name=name,
+        email=email,
+        mobile=mobile,
+        preferred_time=when,
+        need=need,
+        status="new",
+    ))
+
+    # 2) 寄出通知信（含個案編號與預約編號）
     admin_html = f"""
     <h3>新的預約申請</h3>
-    <p><b>時間：</b>{ts}</p>
+    <p><b>預約編號：</b>{booking_id}</p>
+    <p><b>時間：</b>{ts_local}</p>
     <p><b>個案編號：</b>{(case_id or '—')}</p>
     <p><b>姓名：</b>{name}</p>
     <p><b>Email：</b>{email}</p>
@@ -139,12 +160,12 @@ if submit and not missing:
     <p><b>需求：</b><br>{need.replace('\n','<br>')}</p>
     """
     try:
-        send_mail(subject="【影響力平台】新的預約申請", html_body=admin_html)
+        send_mail(subject=f"【影響力平台】新的預約申請（{booking_id}）", html_body=admin_html)
     except Exception as e:
         st.warning(f"通知信寄送失敗：{e}")
 
-    # 成功訊息 & 清空欄位
-    st.success("已收到預約申請，我們將盡快與您聯繫。")
+    # 3) 成功訊息 & 清空欄位
+    st.success(f"已收到預約申請（編號：{booking_id}），我們將盡快與您聯繫。")
     for k in list(defaults.keys()):
         st.session_state[k] = defaults[k]
 
