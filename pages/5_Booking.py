@@ -1,23 +1,30 @@
 # pages/5_Booking.py
-import src.sys_path  # 確保 src/ 在 sys.path，放最前面
 from datetime import datetime
 from zoneinfo import ZoneInfo
 import smtplib, ssl
 from email.message import EmailMessage
 import uuid
 import streamlit as st
-import sys
+import sys, os
 from pathlib import Path
 
-# --- UI 共用 ---
-from src.ui.footer import footer
-from src.ui.theme import inject_css
+# ---- 確保可以匯入 src/* 模組（不依賴 src.sys_path）----
+ROOT = Path(__file__).resolve().parents[1]   # 專案根：含 app.py / src / pages
+SRC  = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
-# --- 匯入 BookingsRepo / Booking（雙保險匯入） ---
+# ---- 匯入共用 UI 與資料層（雙重保險匯入）----
+try:
+    from src.ui.footer import footer
+    from src.ui.theme import inject_css
+except Exception:
+    from ui.footer import footer
+    from ui.theme import inject_css
+
 try:
     from src.repos.bookings import BookingsRepo, Booking
 except Exception:
-    # 若標準前綴失敗，改從 src/ 下直匯
     from repos.bookings import BookingsRepo, Booking
 
 st.set_page_config(page_title="預約會談", page_icon="📅", layout="wide")
@@ -39,14 +46,11 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
-# ---------- 接收結果頁帶來的預填資料 ----------
-# 來源 1：3_Result.py 會放的 booking_prefill（case_id / name / email / mobile / need）
-prefill = st.session_state.pop("booking_prefill", None)
+# ---------- 接收預填資料 ----------
+prefill = st.session_state.pop("booking_prefill", None)   # 來自 3_Result.py 的資料
+user_data = st.session_state.get("user_data", {})         # 相容舊流程
 
-# 來源 2：若有使用 user_data（較舊的流程），也一起帶入
-user_data = st.session_state.get("user_data", {})
-
-# 先建立預設 keys（僅第一次）
+# 初始化欄位狀態（只在第一次）
 defaults = {
     "booking_case_id": "",
     "booking_name": "",
@@ -58,7 +62,7 @@ defaults = {
 for k, v in defaults.items():
     st.session_state.setdefault(k, v)
 
-# 有預填就覆蓋一次（之後使用者自己改的值不會被重設）
+# 1) 先用結果頁帶來的預填覆蓋一次
 if prefill:
     st.session_state["booking_case_id"] = prefill.get("case_id", st.session_state["booking_case_id"])
     st.session_state["booking_name"]    = prefill.get("name",    st.session_state["booking_name"])
@@ -67,7 +71,7 @@ if prefill:
     if prefill.get("need"):
         st.session_state["booking_need"] = prefill["need"]
 
-# 若還是空，再從 user_data 回填一次（相容舊流程）
+# 2) 若仍為空，再從 user_data 補一次（舊流程相容）
 st.session_state["booking_name"]   = st.session_state["booking_name"]   or user_data.get("name", "")
 st.session_state["booking_email"]  = st.session_state["booking_email"]  or user_data.get("email", "")
 st.session_state["booking_mobile"] = st.session_state["booking_mobile"] or user_data.get("phone", "")
@@ -97,7 +101,7 @@ with c4:
 
 st.text_area("需求 *", key="booking_need", height=120, placeholder="請簡述您希望討論的內容…")
 
-# ---------- 驗證 & 送出 ----------
+# ---------- 驗證 ----------
 missing = []
 if st.session_state["booking_name"].strip() == "":   missing.append("姓名")
 if st.session_state["booking_email"].strip() == "":  missing.append("Email")
@@ -109,6 +113,7 @@ if missing:
 
 submit = st.button("送出預約申請", type="primary", use_container_width=True, disabled=bool(missing))
 
+# ---------- 寄信工具 ----------
 def send_mail(subject: str, html_body: str):
     host = st.secrets.get("SMTP_HOST", "")
     port = int(st.secrets.get("SMTP_PORT", "587"))
@@ -140,9 +145,9 @@ def send_mail(subject: str, html_body: str):
             server.login(user, pwd)
             server.send_message(msg)
 
+# ---------- 提交處理 ----------
 if submit and not missing:
     ts_local = datetime.now(TPE).strftime("%Y-%m-%d %H:%M:%S %Z")
-    # 產生 booking_id
     uid = str(uuid.uuid4())[:8].upper()
     booking_id = f"BOOK-{datetime.now(TPE).strftime('%Y%m%d')}-{uid}"
 
@@ -153,7 +158,7 @@ if submit and not missing:
     when    = st.session_state["booking_time"].strip() or "（使用者未填）"
     need    = st.session_state["booking_need"].strip()
 
-    # 1) 依照 Booking dataclass 正確欄位寫入 CSV
+    # 1) 寫入 CSV（依照 Booking dataclass 正確欄位）
     repo = BookingsRepo()
     repo.add(Booking(
         booking_id=booking_id,
@@ -167,7 +172,7 @@ if submit and not missing:
         status="new",
     ))
 
-    # 2) 寄出通知信（含個案編號與預約編號）
+    # 2) 發通知信（含個案與預約編號）
     admin_html = f"""
     <h3>新的預約申請</h3>
     <p><b>預約編號：</b>{booking_id}</p>
@@ -186,8 +191,8 @@ if submit and not missing:
 
     # 3) 成功訊息 & 清空欄位
     st.success(f"已收到預約申請（編號：{booking_id}），我們將盡快與您聯繫。")
-    for k in list(defaults.keys()):
-        st.session_state[k] = defaults[k]
+    for k, v in defaults.items():
+        st.session_state[k] = v
 
     a, b = st.columns([1,1])
     with a:
