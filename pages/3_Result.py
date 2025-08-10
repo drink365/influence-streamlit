@@ -16,10 +16,13 @@ TPE = ZoneInfo("Asia/Taipei")
 # ---------- 工具 ----------
 def to_num(x, default=0.0):
     try:
-        if x is None: return default
-        if isinstance(x, (int, float)): return float(x)
+        if x is None:
+            return default
+        if isinstance(x, (int, float)):
+            return float(x)
         s = str(x).replace(",", "").strip()
-        if s == "": return default
+        if s == "":
+            return default
         return float(s)
     except Exception:
         return default
@@ -27,19 +30,21 @@ def to_num(x, default=0.0):
 def fmt_num(x, unit="萬"):
     try:
         v = float(x)
-        if math.isnan(v) or v <= 0: return "—"
+        if math.isnan(v) or v <= 0:
+            return "—"
         return f"{v:,.0f} {unit}"
     except Exception:
         return "—"
 
 def band(low, high, unit="萬"):
     l, h = to_num(low), to_num(high)
-    if l <= 0 and h <= 0: return "—"
+    if l <= 0 and h <= 0:
+        return "—"
     return f"{fmt_num(l, unit)} – {fmt_num(h, unit)}"
 
 def latest_case_from_csv():
     path = Path(DATA_DIR) / "cases.csv"
-    if not path.exists(): 
+    if not path.exists():
         return None
     try:
         with path.open("r", encoding="utf-8", newline="") as f:
@@ -87,17 +92,17 @@ financial     = to_num(case.get("financial"))
 insurance_cov = to_num(case.get("insurance_cov"))
 
 # 優先讀 total_assets；如果 <=0，就用四項資產相加
-total_assets  = to_num(case.get("total_assets"))
+total_assets = to_num(case.get("total_assets"))
 if total_assets <= 0:
     total_assets = equity + real_estate + financial + insurance_cov
 
-# 流動性需求（預設 5~10%）
+# 預設以總資產 5%~10% 推估交棒流動性
 liq_low_calc  = total_assets * 0.05
 liq_high_calc = total_assets * 0.10
 
-# 若 CSV 沒寫 liq_low/liq_high，就用預設計算
-liq_low  = to_num(case.get("liq_low", liq_low_calc))
-liq_high = to_num(case.get("liq_high", liq_high_calc))
+# **重點修正：空字串/缺值一律回退到推算值，不再變 0**
+liq_low  = to_num(case.get("liq_low"),  liq_low_calc)
+liq_high = to_num(case.get("liq_high"), liq_high_calc)
 
 gap = max(liq_high - insurance_cov, 0)
 
@@ -152,7 +157,7 @@ with c2:
 
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-# ---------- 下一步 + 返回修改 ----------
+# ---------- 下一步 ----------
 st.markdown('<div class="yc-card">', unsafe_allow_html=True)
 st.markdown("### 下一步")
 st.markdown(
@@ -165,34 +170,23 @@ st.markdown(
 cta1, cta2, cta3 = st.columns([1,1,1])
 with cta1:
     if st.button("🔁 返回修改", use_container_width=True):
-        # 回填診斷頁所有欄位到 session_state
+        # 回填到第 2 頁可編輯
         st.session_state["diag_name"]   = case.get("name","")
         st.session_state["diag_email"]  = case.get("email","")
         st.session_state["diag_mobile"] = case.get("mobile","")
         st.session_state["diag_marital"] = case.get("marital","未婚")
-        try:
-            st.session_state["diag_children"] = int(float(case.get("children",0)))
-        except Exception:
-            st.session_state["diag_children"] = 0
+        try: st.session_state["diag_children"] = int(float(case.get("children",0)))
+        except Exception: st.session_state["diag_children"] = 0
         st.session_state["diag_heirs"] = case.get("heirs_ready","尚未明確")
-
-        # 數字欄位
         st.session_state["diag_equity"] = to_num(case.get("equity"), 0)
         st.session_state["diag_re"]     = to_num(case.get("real_estate"), 0)
         st.session_state["diag_fin"]    = to_num(case.get("financial"), 0)
         st.session_state["diag_cov"]    = to_num(case.get("insurance_cov"), 0)
-
-        # 多選與 slider
         focuses = (case.get("focus") or "").strip()
         st.session_state["diag_focus"] = focuses.split("、") if focuses else []
-        try:
-            st.session_state["diag_years"] = int(float(case.get("target_years", 3)))
-        except Exception:
-            st.session_state["diag_years"] = 3
-
-        # 同意勾選預設為 True
+        try: st.session_state["diag_years"] = int(float(case.get("target_years", 3)))
+        except Exception: st.session_state["diag_years"] = 3
         st.session_state["diag_agree"] = True
-
         st.switch_page("pages/2_Diagnostic.py")
 
 with cta2:
