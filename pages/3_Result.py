@@ -4,6 +4,7 @@ from datetime import date
 from src.repos.case_repo import CaseRepo
 from src.repos.event_repo import EventRepo
 from src.services.reports import generate_docx
+from src.services.reports_pdf import build_pdf_report
 from src.services.charts import tax_breakdown_bar, asset_pie, savings_compare_bar, simple_sankey
 from src.domain.tax_loader import load_tax_constants
 from src.domain.tax_rules import EstateTaxCalculator
@@ -70,7 +71,7 @@ if case_id:
         fig2 = asset_pie(assets_fin, assets_re, assets_biz)
         st.pyplot(fig2, use_container_width=True)
 
-    # === 策略模擬區（不宣稱減稅，以資金缺口對比表述） ===
+    # === 策略模擬區 ===
     st.divider()
     st.markdown("### 策略模擬（資金缺口對比）")
     reserve_default = float(case.get("liquidity_needed", 0.0))
@@ -89,21 +90,29 @@ if case_id:
         st.toast("已記錄策略模擬", icon="✅")
 
     st.divider()
-    st.markdown("### 檢視報告（簡版）")
-    st.info("以下為簡版示意。完整版包含：稅則假設、資產分類明細、策略建議、圖像化傳承圖等。")
+    st.markdown("### 檢視報告（簡/全）")
+    st.info("完整版 PDF/DOCX 需解鎖。若環境無 WeasyPrint，系統會退回提供 HTML 下載。")
 
-    st.markdown("### 解鎖完整版報告")
     tabs = st.tabs(["A. 管理碼解鎖","B. 成交回報解鎖（推薦）"])
+
+    def _download_full_reports(current_case):
+        # 產生 PDF（或 HTML）
+        path = build_pdf_report(current_case)
+        label = "⬇️ 下載 PDF（完整版）" if path.suffix.lower() == ".pdf" else "⬇️ 下載 HTML（完整版）"
+        with open(path, "rb") as f:
+            st.download_button(label, data=f, file_name=path.name)
+        # 產生 DOCX（維持相容）
+        fname = generate_docx(current_case, full=True)
+        with open(f"data/reports/{fname}", "rb") as f:
+            st.download_button("⬇️ 下載 DOCX（完整版）", data=f, file_name=fname)
 
     with tabs[0]:
         admin_key = st.text_input("管理碼", type="password")
         if st.button("用管理碼解鎖"):
             if admin_key and admin_key == st.secrets.get("ADMIN_KEY", ""):
                 EventRepo.log(case_id, "REPORT_UNLOCKED", {"by":"admin_key"})
-                fname = generate_docx(case, full=True)
                 st.success("已解鎖完整版報告！")
-                with open(f"data/reports/{fname}", "rb") as f:
-                    st.download_button("⬇️ 下載 DOCX（完整版）", data=f, file_name=fname)
+                _download_full_reports(case)
             else:
                 st.error("管理碼不正確。")
 
@@ -117,7 +126,5 @@ if case_id:
         if submitted:
             CaseRepo.update_status(case_id, "Won")
             EventRepo.log(case_id, "WON_REPORTED", {"product": product, "premium": premium, "remark": remark})
-            fname = generate_docx(case, full=True)
             st.success("謝謝回報！已解鎖完整版報告。")
-            with open(f"data/reports/{fname}", "rb") as f:
-                st.download_button("⬇️ 下載 DOCX（完整版）", data=f, file_name=fname)
+            _download_full_reports(case)
