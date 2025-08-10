@@ -1,18 +1,13 @@
-# src/services/charts.py
 from __future__ import annotations
-from typing import List, Tuple, Dict
+from typing import List, Tuple
 import math
-
 import matplotlib.pyplot as plt
+from matplotlib.sankey import Sankey
 
 from src.domain.tax_rules import TaxConstants
 
+# --- 既有：各級距稅額 Bar ---
 def _compute_tax_components_wan(taxable_base_wan: float, brackets: List[Tuple[float, float]]) -> List[Tuple[str, float]]:
-    """
-    將課稅基礎（萬）依級距拆成各級稅額（萬）。
-    brackets: [(上限_萬, 稅率), ...]；最後一級上限應為 inf
-    回傳: [(label, tax_wan), ...]
-    """
     parts = []
     prev = 0.0
     for idx, (upper, rate) in enumerate(brackets, start=1):
@@ -28,17 +23,13 @@ def _compute_tax_components_wan(taxable_base_wan: float, brackets: List[Tuple[fl
     return parts
 
 def tax_breakdown_bar(taxable_base_wan: float, *, constants: TaxConstants | None = None):
-    """
-    依當前 TaxConstants 將稅額拆解並畫 Bar 圖（單位：萬元）。
-    回傳: matplotlib Figure
-    """
     c = constants or TaxConstants()
     parts = _compute_tax_components_wan(taxable_base_wan, list(c.TAX_BRACKETS))
     labels = [p[0] for p in parts]
     values = [p[1] for p in parts]
 
-    fig, ax = plt.subplots(figsize=(6, 3.6))  # 單張圖，避免子圖
-    ax.bar(labels, values)  # 不指定顏色，遵循基礎樣式
+    fig, ax = plt.subplots(figsize=(6, 3.6))
+    ax.bar(labels, values)
     ax.set_title("各級距稅額拆解（萬元）")
     ax.set_xlabel("級距")
     ax.set_ylabel("稅額（萬）")
@@ -47,28 +38,63 @@ def tax_breakdown_bar(taxable_base_wan: float, *, constants: TaxConstants | None
     fig.tight_layout()
     return fig
 
-def asset_pie(financial: float, realestate: float, business: float):
+# --- 新增：節稅對比（實際上是「稅後資金缺口」對比） ---
+
+def savings_compare_bar(current_tax_yuan: float, coverage_yuan: float):
     """
-    資產結構圓餅圖（輸入：元）。內部自動換算成佔比顯示。
-    回傳: matplotlib Figure
+    畫兩根 Bar：
+      - 稅額（元）
+      - 稅後資金缺口（= max(稅額 - 保單/信託預留, 0)）
+    目的：傳達「方案降低稅後現金壓力」，避免不當宣稱減稅。
     """
-    vals = [max(financial, 0.0), max(realestate, 0.0), max(business, 0.0)]
-    labels = ["金融資產", "不動產", "公司股權"]
-    total = sum(vals)
-    if total <= 0:
-        # 避免 0 除，給一張空心圖
-        vals = [1, 1, 1]
-        labels = ["金融資產(空)", "不動產(空)", "公司股權(空)"]
+    current_tax = max(float(current_tax_yuan), 0.0)
+    coverage = max(float(coverage_yuan), 0.0)
+    gap = max(current_tax - coverage, 0.0)
 
     fig, ax = plt.subplots(figsize=(6, 3.6))
-    wedges, _ = ax.pie(vals, labels=None, autopct=None, startangle=90)
-    ax.set_title("資產結構（佔比）")
-    # 自己標上百分比
-    if total > 0:
-        pct = [v / total * 100 for v in vals]
-        legend_labels = [f"{l}  {p:,.1f}%" for l, p in zip(labels, pct)]
-    else:
-        legend_labels = labels
-    ax.legend(wedges, legend_labels, loc="center left", bbox_to_anchor=(1, 0.5))
+    labels = ["稅額", "稅後資金缺口"]
+    values = [current_tax, gap]
+    ax.bar(labels, values)
+    ax.set_title("方案對比：稅後資金缺口")
+    ax.set_ylabel("金額（元）")
+    for i, v in enumerate(values):
+        ax.text(i, v, f"{v:,.0f}", ha="center", va="bottom", fontsize=9)
+    fig.tight_layout()
+    return fig
+
+# --- 新增：簡化 Sankey（資產→稅款/家族；顯示保單覆蓋） ---
+
+def simple_sankey(total_assets_yuan: float, tax_yuan: float, reserve_yuan: float):
+    """
+    節點：
+      資產 → 稅款、家族；另以「保單預留」覆蓋部分稅款（視覺上作為稅款的分流來源）。
+    說明：matplotlib.sankey 限制較多，這裡做簡化視覺，不求完美精細。
+    """
+    total = max(float(total_assets_yuan), 0.0)
+    tax = max(float(tax_yuan), 0.0)
+    reserve = max(float(reserve_yuan), 0.0)
+    reserve_to_tax = min(reserve, tax)
+    other_tax = tax - reserve_to_tax
+    to_family = max(total - tax, 0.0)
+
+    # 為避免 0 造成不可視，給極小值
+    eps = max(total * 1e-6, 1.0)
+
+    fig = plt.figure(figsize=(7.2, 3.8))
+    ax = fig.add_subplot(1, 1, 1, xticks=[], yticks=[])
+    ax.set_title("資金流示意（資產→稅款/家族；保單覆蓋稅款）")
+
+    # 第一條 Sankey：資產流出到 稅款(其他負擔) 與 家族
+    sankey = Sankey(ax=ax, format='%.0f')
+    flows1 = [total, -other_tax if other_tax > 0 else -eps, -to_family if to_family > 0 else -eps]
+    labels1 = ["資產總額", "稅款（其他資金）", "留給家族"]
+    orientations1 = [0, 1, -1]
+    sankey.add(flows=flows1, labels=labels1, orientations=orientations1, trunklength=1.0, pathlengths=[0.4,0.4,0.4])
+
+    # 第二條 Sankey：保單預留 → 稅款（與第一條的稅款端相接）
+    if reserve_to_tax > 0:
+        sankey.add(flows=[reserve_to_tax, -reserve_to_tax], labels=["保單預留", "稅款（保單覆蓋）"], orientations=[0, 0], prior=0, connect=(0, 1), pathlengths=[0.4,0.3])
+
+    sankey.finish()
     fig.tight_layout()
     return fig
