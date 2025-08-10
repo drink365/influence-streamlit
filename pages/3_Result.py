@@ -1,10 +1,13 @@
 # pages/3_Result.py
-import streamlit as st
+import streamlit as st, json
+from datetime import date
+
 from src.repos.case_repo import CaseRepo
 from src.repos.event_repo import EventRepo
 from src.services.reports import generate_docx
 from src.services.charts import tax_breakdown_bar, asset_pie
-from src.domain.tax_rules import TaxConstants  # 取用當前級距
+from src.domain.tax_loader import load_tax_constants
+from src.domain.tax_rules import EstateTaxCalculator
 
 st.set_page_config(page_title="結果", page_icon="📄", layout="wide")
 
@@ -17,25 +20,21 @@ if case_id:
         st.error("查無案件，請確認案件碼是否正確。")
         st.stop()
 
-    # 指標
     col = st.columns(3)
     col[0].metric("淨遺產（元）", f"{case['net_estate']:,.0f}")
     col[1].metric("估算稅額（元）", f"{case['tax_estimate']:,.0f}")
     col[2].metric("建議預留稅源（元）", f"{case['liquidity_needed']:,.0f}")
 
-    # 讀 payload 中的課稅基礎（萬）與資產組成
+    # 取 payload
     payload = {}
     try:
-        import json
         payload = json.loads(case.get("plan_json") or case.get("payload_json") or "{}")
     except Exception:
         payload = {}
 
-    # 從 payload 取值（兼容之前欄位）
     taxable_base_wan = None
     if isinstance(payload, dict):
         taxable_base_wan = payload.get("taxable_base_wan")
-        # 早期版本把參數放在 payload["params"] 內，也接受
         if taxable_base_wan is None and "params" in payload:
             taxable_base_wan = payload["params"].get("taxable_base_wan")
 
@@ -49,12 +48,26 @@ if case_id:
     c1, c2 = st.columns(2)
 
     with c1:
-        if isinstance(taxable_base_wan, (int, float)):
-            st.caption("各級距稅額拆解（依當前稅制）")
-            fig1 = tax_breakdown_bar(float(taxable_base_wan), constants=TaxConstants())
-            st.pyplot(fig1, use_container_width=True)
-        else:
-            st.info("找不到課稅基礎（萬）的明細，已略過稅負分布圖。請更新診斷頁後再試。")
+        # ✅ 小補丁B：舊案若沒有 taxable_base_wan，就用可回推邏輯估算
+        if taxable_base_wan is None:
+            constants = load_tax_constants(on_date=date.today())
+            calc = EstateTaxCalculator(constants)
+            # 估算：以 payload.params 裡的扣除參數，將 net_estate 轉萬後回推基礎
+            params = (payload.get("params") or {})
+            has_spouse = bool(params.get("has_spouse", False))
+            adult_children = int(params.get("adult_children", 0))
+            parents = int(params.get("parents", 0))
+            disabled_people = int(params.get("disabled_people", 0))
+            other_dependents = int(params.get("other_dependents", 0))
+            net_wan = float(case["net_estate"]) / constants.UNIT_FACTOR
+            ded_wan = calc.compute_total_deductions_wan(
+                has_spouse, adult_children, parents, disabled_people, other_dependents
+            )
+            taxable_base_wan = calc.compute_taxable_base_wan(net_wan, ded_wan)
+
+        st.caption("各級距稅額拆解（依當前稅制）")
+        fig1 = tax_breakdown_bar(float(taxable_base_wan), constants=load_tax_constants(on_date=date.today()))
+        st.pyplot(fig1, use_container_width=True)
 
     with c2:
         st.caption("資產結構（金融 / 不動產 / 公司股權）")
@@ -65,7 +78,6 @@ if case_id:
     st.markdown("### 檢視報告（簡版）")
     st.info("以下為簡版示意。完整版包含：稅則假設、資產分類明細、策略建議、圖像化傳承圖等。")
 
-    # === 解鎖邏輯 ===
     st.markdown("### 解鎖完整版報告")
     tabs = st.tabs(["A. 管理碼解鎖","B. 成交回報解鎖（推薦）"])
 
