@@ -148,7 +148,7 @@ with c2:
 
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-# ---------- 下一步 + 返回修改 ----------
+# ---------- 下一步 + 返回修改 / 預約（帶 case_id 與預填） ----------
 st.markdown('<div class="yc-card">', unsafe_allow_html=True)
 st.markdown("### 下一步")
 st.markdown(
@@ -190,7 +190,15 @@ with cta1:
 
 with cta2:
     if st.button("📅 預約 30 分鐘會談", type="primary", use_container_width=True):
+        st.session_state["booking_prefill"] = {
+            "case_id": case_id or "",
+            "name":   case.get("name",""),
+            "email":  case.get("email",""),
+            "mobile": case.get("mobile",""),
+            "need":   f"我想進一步討論交棒流動性與保障規劃（估算需求 {fmt_num(liq_need)}）。重點關注：{(case.get('focus') or '—')}",
+        }
         st.switch_page("pages/5_Booking.py")
+
 with cta3:
     if st.button("🏠 回首頁", use_container_width=True):
         st.switch_page("app.py")
