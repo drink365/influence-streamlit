@@ -12,7 +12,7 @@ DATA_DIR = Path("data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CASES_CSV = DATA_DIR / "cases.csv"
 
-# ===== 嘗試載入可選套件（非必須，避免部署卡住） =====
+# ===== 可選套件（避免部署卡住） =====
 try:
     from docx import Document  # 選用
     from docx.shared import Pt
@@ -40,7 +40,7 @@ def footer():
         unsafe_allow_html=True
     )
 
-# ===== 資料處理（純標準庫 csv） =====
+# ===== CSV 儲存 =====
 CSV_HEADERS = [
     "ts","case_id","name","mobile","email","marital","children","special",
     "equity","real_estate","financial","insurance_cov",
@@ -48,7 +48,6 @@ CSV_HEADERS = [
 ]
 
 def append_case_row(row: dict):
-    """將 row 附加至 CSV；若檔案不存在先寫入表頭。"""
     need_header = not CASES_CSV.exists()
     with CASES_CSV.open("a", newline="", encoding="utf-8") as f:
         w = csv.DictWriter(f, fieldnames=CSV_HEADERS)
@@ -67,7 +66,6 @@ def load_case(case_id: str):
                 last = row
         if not last:
             return None
-        # 型別轉換
         for k in ["children","equity","real_estate","financial","insurance_cov",
                   "total_assets","liq_low","liq_high","gap_low","gap_high"]:
             if last.get(k):
@@ -75,14 +73,13 @@ def load_case(case_id: str):
                     last[k] = int(float(last[k]))
                 except Exception:
                     pass
-        # focus：字串 → 清單
         if last.get("focus"):
             last["focus"] = [x for x in last["focus"].split("|") if x]
         else:
             last["focus"] = []
         return last
 
-# ===== 報告輸出（.docx 可選，否則提供 .txt 備援） =====
+# ===== 報告輸出 =====
 def build_docx_bytes(case_id: str, case: dict) -> bytes | None:
     if Document is None:
         return None
@@ -200,6 +197,7 @@ def page_diagnostic():
     st.title("傳承規劃｜快速診斷（MVP）")
     st.write("填寫 60 秒，取得初步風險指標與行動建議。")
 
+    # ✅ 表單開始
     with st.form("diag"):
         st.subheader("家庭結構")
         c1, c2, c3 = st.columns(3)
@@ -230,6 +228,7 @@ def page_diagnostic():
 
         # ✅ 表單內唯一提交按鈕
         submitted = st.form_submit_button("產生診斷結果與 CaseID")
+    # ✅ 表單結束（此行之後不允許用 st.form 的 widget）
 
     # ✅ 表單外處理：提交後寫入 & 自動導向結果頁
     if submitted:
@@ -253,7 +252,6 @@ def page_diagnostic():
             "gap_low": int(gap_low), "gap_high": int(gap_high),
         }
         append_case_row(row)
-
         st.session_state.last_case_id = case_id
         st.session_state.page = "結果"
         st.rerun()
