@@ -6,27 +6,26 @@ import csv
 from io import BytesIO
 import os
 
-# --- 啟動時清空快取，避免雲端殘留造成卡住 ---
+# ---------- 啟動時清快取，降低雲端殘留影響 ----------
 try:
     st.cache_data.clear()
     st.cache_resource.clear()
 except Exception:
     pass
 
-# ===== 基本設定 =====
+# ---------- 基本設定 ----------
 st.set_page_config(page_title="影響力平台", page_icon="✨", layout="wide")
 
 DATA_DIR = Path("data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CASES_CSV = DATA_DIR / "cases.csv"
 
-# 可選套件：有裝就用（顯示表格更好看），沒裝也能跑
+# 可選套件（不裝也能跑）
 try:
     import pandas as pd
 except Exception:
     pd = None
 
-# 可選：docx 輸出（沒裝則用 .txt 備援）
 try:
     from docx import Document
     from docx.shared import Pt
@@ -34,7 +33,7 @@ except Exception:
     Document = None
     Pt = None
 
-# ===== 管理密鑰（從 secrets 讀，沒有就用 demo 方便本機測） =====
+# ---------- 管理密鑰（secrets > env > demo） ----------
 ADMIN_KEY = None
 try:
     ADMIN_KEY = st.secrets.get("ADMIN_KEY", None)
@@ -43,7 +42,7 @@ except Exception:
 if not ADMIN_KEY:
     ADMIN_KEY = os.environ.get("ADMIN_KEY", "demo")  # 本機/未設定時可用 demo
 
-# ===== 初始化狀態 =====
+# ---------- 狀態 ----------
 if "page" not in st.session_state:
     st.session_state.page = "首頁"
 if "last_case_id" not in st.session_state:
@@ -51,7 +50,7 @@ if "last_case_id" not in st.session_state:
 if "admin_ok" not in st.session_state:
     st.session_state.admin_ok = False
 
-# ===== 共用：頁尾 =====
+# ---------- 共用：頁尾 ----------
 def footer():
     st.markdown("---")
     st.markdown(
@@ -65,7 +64,7 @@ def footer():
         unsafe_allow_html=True
     )
 
-# ===== CSV 儲存/讀取 =====
+# ---------- CSV 儲存/讀取 ----------
 CSV_HEADERS = [
     "ts","case_id","name","mobile","email","marital","children","special",
     "equity","real_estate","financial","insurance_cov",
@@ -82,7 +81,7 @@ def append_case_row(row: dict):
 
 @st.cache_data(show_spinner=False)
 def load_all_cases():
-    """讀取全部個案為 list[dict]；若有 pandas 也回傳 DataFrame。"""
+    """回傳 (rows, df or None)。"""
     if not CASES_CSV.exists():
         return [], (pd.DataFrame(columns=CSV_HEADERS) if pd else None)
     rows = []
@@ -92,12 +91,12 @@ def load_all_cases():
             rows.append(row)
     if pd:
         df = pd.DataFrame(rows)
-        # 轉型（數字欄位）
+        # 數字轉型
         for col in ["children","equity","real_estate","financial","insurance_cov",
                     "total_assets","liq_low","liq_high","gap_low","gap_high"]:
             if col in df.columns:
                 df[col] = pd.to_numeric(df[col], errors="coerce")
-        # 時間排序（新→舊）
+        # 時間排序
         if "ts" in df.columns:
             df["ts"] = pd.to_datetime(df["ts"], errors="coerce")
             df = df.sort_values("ts", ascending=False)
@@ -105,7 +104,6 @@ def load_all_cases():
     return rows, None
 
 def load_case(case_id: str):
-    """從 CSV 搜尋指定 case_id 並轉換型別。"""
     if not CASES_CSV.exists():
         return None
     with CASES_CSV.open("r", newline="", encoding="utf-8") as f:
@@ -129,7 +127,7 @@ def load_case(case_id: str):
         last["focus"] = []
     return last
 
-# ===== 報告輸出 =====
+# ---------- 報告輸出 ----------
 def build_docx_bytes(case_id: str, case: dict) -> bytes | None:
     if Document is None:
         return None
@@ -215,7 +213,7 @@ def build_txt_bytes(case_id: str, case: dict) -> bytes:
     lines.append("免責聲明：本報告為初步示意，實際方案須由專業顧問複核並依相關法令辦理。")
     return ("\n".join(lines)).encode("utf-8")
 
-# ===== 頁面們 =====
+# ---------- 頁面們 ----------
 def page_home():
     st.title("傳承您的影響力")
     st.write("AI 智慧 + 專業顧問，打造專屬的可視化傳承方案，確保財富與愛同時流傳。")
@@ -355,6 +353,98 @@ def page_result():
 
     footer()
 
+# ---- 管理：案件總表（即時驗證；成功自動刷新） ----
+def page_cases():
+    st.title("案件總表（管理）")
+
+    def _verify_from_sidebar():
+        key_in = st.session_state.get("admin_key_sidebar", "")
+        st.session_state.admin_ok = (key_in == ADMIN_KEY)
+        if st.session_state.admin_ok:
+            st.toast("已通過驗證，正在載入資料…", icon="✅")
+            st.rerun()
+        else:
+            st.toast("密鑰錯誤", icon="❌")
+
+    def _verify_from_inline():
+        key_in = st.session_state.get("admin_key_inline", "")
+        st.session_state.admin_ok = (key_in == ADMIN_KEY)
+        if st.session_state.admin_ok:
+            st.toast("已通過驗證，正在載入資料…", icon="✅")
+            st.rerun()
+        else:
+            st.toast("密鑰錯誤", icon="❌")
+
+    # 側邊欄驗證（on_change：按 Enter 立即驗證）
+    with st.sidebar:
+        st.subheader("管理密鑰")
+        st.text_input("請輸入管理密鑰", type="password", key="admin_key_sidebar", on_change=_verify_from_sidebar)
+
+    # 未通過：頁內顯示另一個即時驗證入口
+    if not st.session_state.admin_ok:
+        st.warning("此頁需管理密鑰。如未設定 secrets，可先用測試密鑰：`demo`。")
+        st.text_input("在此輸入管理密鑰（頁內）", type="password", key="admin_key_inline", on_change=_verify_from_inline)
+        footer(); return
+
+    # 已通過：顯示總表
+    rows, df = load_all_cases()
+    if not rows:
+        st.info("目前尚無個案資料。請先到『診斷』頁建立個案。")
+        footer(); return
+
+    st.subheader("資料檢視與篩選")
+    c1, c2, _ = st.columns([2,2,1])
+    kw = c1.text_input("姓名 / Email 關鍵字", "")
+    recent_days = c2.number_input("僅看最近 N 天（0 表示不限制）", min_value=0, max_value=3650, value=0, step=1)
+
+    if df is not None:
+        df_view = df.copy()
+        if kw:
+            mask = (df_view["name"].fillna("").str.contains(kw, case=False)) | \
+                   (df_view["email"].fillna("").str.contains(kw, case=False))
+            df_view = df_view[mask]
+        if recent_days and "ts" in df_view.columns:
+            import pandas as pd
+            cutoff = datetime.now(timezone.utc) - pd.Timedelta(days=recent_days)
+            df_view = df_view[df_view["ts"] >= cutoff]
+
+        st.dataframe(
+            df_view[["ts","case_id","name","email","mobile","total_assets","liq_low","liq_high","gap_low","gap_high"]],
+            use_container_width=True, height=420
+        )
+        st.markdown("—")
+        selected_case = st.selectbox("選擇 CaseID 前往檢視結果", df_view["case_id"].astype(str).tolist())
+    else:
+        view = rows
+        if kw:
+            view = [r for r in view if kw.lower() in (r.get("name","") + r.get("email","")).lower()]
+        if recent_days:
+            cutoff = datetime.now(timezone.utc)
+            def within_days(ts):
+                try:
+                    dt = datetime.fromisoformat(ts.replace("Z",""))
+                    return (cutoff - dt).days <= recent_days
+                except Exception:
+                    return True
+            view = [r for r in view if within_days(r.get("ts",""))]
+        st.dataframe(view, use_container_width=True, height=420)
+        selected_case = st.selectbox("選擇 CaseID 前往檢視結果", [r["case_id"] for r in view])
+
+    cA, cB = st.columns(2)
+    with cA:
+        if st.button("前往結果頁"):
+            st.session_state.last_case_id = selected_case
+            st.session_state.page = "結果"
+            st.rerun()
+    with cB:
+        with CASES_CSV.open("rb") as f:
+            st.download_button(
+                "下載 cases.csv", data=f.read(), file_name="cases.csv",
+                mime="text/csv", use_container_width=True
+            )
+
+    footer()
+
 def page_book():
     st.title("預約 30 分鐘線上會談")
     st.info("（正式版可嵌入 Calendly / Google 日曆 iframe）")
@@ -377,100 +467,6 @@ def page_advisors():
         brand = st.text_input("希望顯示於報告的顧問品牌名稱")
         if st.form_submit_button("建立帳號（示意）"):
             st.success("註冊成功（示意）。正式版將儲存資料並寄出歡迎信。")
-    footer()
-
-# ===== 新頁面：案件總表（需管理密鑰） =====
-def page_cases():
-    st.title("案件總表（管理）")
-
-    # 側邊欄：輸入密鑰（也在頁面裡放一個區塊以防漏看）
-    with st.sidebar:
-        st.subheader("管理密鑰")
-        key_in = st.text_input("請輸入管理密鑰", type="password")
-        if st.button("驗證"):
-            st.session_state.admin_ok = (key_in == ADMIN_KEY)
-            if st.session_state.admin_ok:
-                st.success("已通過驗證")
-            else:
-                st.error("密鑰錯誤")
-
-    if not st.session_state.admin_ok:
-        st.warning("此頁需管理密鑰。如未設定 secrets，可先用測試密鑰：`demo`。")
-        key_in2 = st.text_input("在此輸入管理密鑰（頁內）", type="password", key="page_key")
-        if st.button("頁內驗證"):
-            st.session_state.admin_ok = (key_in2 == ADMIN_KEY)
-            if st.session_state.admin_ok:
-                st.success("已通過驗證，請重新整理或切換頁面查看資料")
-        footer(); return
-
-    rows, df = load_all_cases()
-    if not rows:
-        st.info("目前尚無個案資料。請先到『診斷』頁建立個案。")
-        footer(); return
-
-    st.subheader("資料檢視與篩選")
-    # 篩選：姓名/Email 關鍵字、日期（近幾天）
-    c1, c2, c3 = st.columns([2,2,1])
-    kw = c1.text_input("姓名 / Email 關鍵字", "")
-    recent_days = c2.number_input("僅看最近 N 天（0 表示不限制）", min_value=0, max_value=3650, value=0, step=1)
-
-    # 轉成顯示清單/DF
-    if df is not None:
-        df_view = df.copy()
-        if kw:
-            mask = (df_view["name"].fillna("").str.contains(kw, case=False)) | \
-                   (df_view["email"].fillna("").str.contains(kw, case=False))
-            df_view = df_view[mask]
-        if recent_days and "ts" in df_view.columns:
-            cutoff = datetime.now(timezone.utc) - pd.Timedelta(days=recent_days)
-            df_view = df_view[df_view["ts"] >= cutoff]
-        # 顯示
-        st.dataframe(
-            df_view[["ts","case_id","name","email","mobile","total_assets","liq_low","liq_high","gap_low","gap_high"]],
-            use_container_width=True,
-            height=400
-        )
-        # 選 CaseID
-        st.markdown("—")
-        selected_case = st.selectbox("選擇 CaseID 前往檢視結果", df_view["case_id"].astype(str).tolist())
-    else:
-        # 無 pandas：用 list 過濾
-        view = rows
-        if kw:
-            view = [r for r in view if kw.lower() in (r.get("name","") + r.get("email","")).lower()]
-        if recent_days:
-            try:
-                cutoff = datetime.now(timezone.utc)
-                def within_days(ts):
-                    try:
-                        dt = datetime.fromisoformat(ts.replace("Z",""))
-                        return (cutoff - dt).days <= recent_days
-                    except Exception:
-                        return True
-                view = [r for r in view if within_days(r.get("ts",""))]
-            except Exception:
-                pass
-        st.write(f"共 {len(view)} 筆")
-        st.dataframe(view, use_container_width=True, height=400)
-        selected_case = st.selectbox("選擇 CaseID 前往檢視結果", [r["case_id"] for r in view])
-
-    cA, cB = st.columns(2)
-    with cA:
-        if st.button("前往結果頁"):
-            st.session_state.last_case_id = selected_case
-            st.session_state.page = "結果"
-            st.rerun()
-    with cB:
-        # 下載 CSV 原檔
-        with CASES_CSV.open("rb") as f:
-            st.download_button(
-                "下載 cases.csv",
-                data=f.read(),
-                file_name="cases.csv",
-                mime="text/csv",
-                use_container_width=True
-            )
-
     footer()
 
 def page_plans():
@@ -504,7 +500,7 @@ def page_privacy():
     )
     footer()
 
-# ===== 側邊欄導航 =====
+# ---------- 側邊欄導航 ----------
 st.sidebar.header("功能選單")
 page = st.sidebar.radio(
     "選擇頁面",
@@ -513,7 +509,7 @@ page = st.sidebar.radio(
 )
 st.session_state.page = page
 
-# ===== 路由 =====
+# ---------- 路由 ----------
 if page == "首頁":
     page_home()
 elif page == "診斷":
