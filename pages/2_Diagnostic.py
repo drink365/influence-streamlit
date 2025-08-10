@@ -1,163 +1,209 @@
 # pages/2_Diagnostic.py
-import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from pathlib import Path
+import uuid
 import streamlit as st
+import sys
+from pathlib import Path
 
-from src.ui.footer import footer
-from src.ui.theme import inject_css
-from src.repos.cases import CaseRepo
-from src.config import DATA_DIR
+# ---- 確保可以匯入 src/* 模組（不依賴 src.sys_path）----
+ROOT = Path(__file__).resolve().parents[1]   # 專案根：含 app.py / src / pages
+SRC  = ROOT / "src"
+if str(SRC) not in sys.path:
+    sys.path.insert(0, str(SRC))
 
-st.set_page_config(page_title="60 秒傳承風險診斷", page_icon="🧭", layout="wide")
+# ---- 共用 UI（雙保險匯入）----
+try:
+    from src.ui.theme import inject_css
+    from src.ui.footer import footer
+except Exception:
+    from ui.theme import inject_css
+    from ui.footer import footer
+
+# ---- 可選：寫入個案資料（存在才用）----
+CasesRepo = None
+Case = None
+try:
+    from src.repos.cases import CasesRepo, Case  # 你專案中的資料存取層
+except Exception:
+    try:
+        from repos.cases import CasesRepo, Case
+    except Exception:
+        CasesRepo = None
+        Case = None
+
+st.set_page_config(page_title="家族傳承｜診斷", page_icon="🧭", layout="wide")
 inject_css()
 TPE = ZoneInfo("Asia/Taipei")
 
-# ---- 單次導頁旗標（成功送出後才會設定；這裡用完即清）----
-go_case = st.session_state.pop("__go_result_case", None)
-if isinstance(go_case, str) and go_case:
-    st.session_state["last_case_id"] = go_case
-    st.switch_page("pages/3_Result.py")
-
-# ---- 預設值（僅首次設定；之後都用 session_state 持有最新值）----
-defaults = {
-    "diag_name": "", "diag_email": "", "diag_mobile": "",
-    "diag_marital": "未婚", "diag_children": 0, "diag_heirs": "尚未明確",
-    "diag_equity": 0, "diag_re": 0, "diag_fin": 0, "diag_cov": 0,
-    "diag_focus": ["節稅安排", "股權交棒"], "diag_years": 3, "diag_agree": True,
-}
-for k, v in defaults.items():
-    st.session_state.setdefault(k, v)
-
-# ---- 檔案 / Repo ----
-Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
-repo = CaseRepo()
-
-# ---- 樣式 ----
+# ---------- 樣式 ----------
 st.markdown("""
 <style>
+  .yc-card { background:#fff; border-radius:16px; padding:18px;
+             border:1px solid rgba(0,0,0,.06); box-shadow:0 6px 22px rgba(0,0,0,.05); }
   .yc-hero { background:linear-gradient(180deg,#F7F7F8 0%,#FFF 100%);
-             border:1px solid #0001; border-radius:20px; padding:24px 28px;
-             box-shadow:0 8px 30px #0001; }
+             border-radius:20px; padding:24px 28px; }
   .yc-badge { display:inline-block; padding:6px 10px; border-radius:999px;
-              background:rgba(168,135,22,.12); color:#A88716; font-size:12px; font-weight:700;
-              border:1px solid rgba(168,135,22,.28); }
-  .yc-step { display:flex; gap:.6rem; align-items:center; margin:.4rem 0 1rem; color:#374151; font-weight:700; }
-  .yc-dot  { width:26px; height:26px; border-radius:999px; background:rgba(189,14,27,.08); border:1px solid rgba(189,14,27,.35);
-             display:flex; align-items:center; justify-content:center; font-size:12px; color:#BD0E1B; }
-  .yc-cta  button[kind="primary"] { background:#BD0E1B !important; border-color:#BD0E1B !important;
-              border-radius:999px !important; font-weight:700 !important; }
-  .yc-alert { background:#fff9f0; border:1px solid #facc15; color:#92400e; padding:8px 12px; border-radius:10px; font-size:13px; }
+              background:rgba(168,135,22,0.14); color:#A88716; font-size:12px; font-weight:700;
+              border:1px solid rgba(168,135,22,0.27); }
+  .metric { background:#FAFAFB; border:1px dashed #E5E7EB; padding:10px 12px; border-radius:12px;}
 </style>
 """, unsafe_allow_html=True)
 
-# ---- Hero ----
+# ---------- 導頁工具（雙保險） ----------
+def safe_switch(page_path: str, fallback_label: str = ""):
+    try:
+        st.switch_page(page_path)
+    except Exception:
+        if fallback_label:
+            st.page_link(page_path, label=fallback_label)
+
+# ---------- 預設狀態（避免與元件衝突，只在頁面首次建立時設） ----------
+defaults = {
+    "diag_equity": 0,
+    "diag_realestate": 0,
+    "diag_cash": 0,
+    "diag_securities": 0,
+    "diag_other": 0,
+    "diag_insurance_cov": 0,
+    "diag_focus": [],            # 多選：list[str]
+    "diag_name": "",
+    "diag_email": "",
+    "diag_mobile": "",
+}
+for k, v in defaults.items():
+    if k not in st.session_state:
+        st.session_state[k] = v
+
+# ---------- Hero ----------
 st.markdown('<div class="yc-hero">', unsafe_allow_html=True)
 st.markdown('<span class="yc-badge">快速診斷</span>', unsafe_allow_html=True)
-st.markdown("<h1>60 秒傳承風險診斷</h1>", unsafe_allow_html=True)
-st.markdown("<p>填完即可看到您的風險重點、建議流動性與保障缺口。</p>", unsafe_allow_html=True)
+st.subheader("輸入關鍵資訊，立即產出初步建議")
+st.caption("（單位：萬元）")
 st.markdown("</div>", unsafe_allow_html=True)
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-# ---- 快速動作：清除本次填寫（同時清掉導航旗標）----
-c_reset, _ = st.columns([1, 7])
-with c_reset:
-    if st.button("🧹 清除本次填寫", use_container_width=True):
-        for k, v in defaults.items():
-            st.session_state[k] = v
-        st.session_state.pop("__go_result_case", None)
-        st.session_state.pop("last_case_id", None)
-        st.rerun()
+# ---------- 表單 ----------
+st.markdown('<div class="yc-card">', unsafe_allow_html=True)
+with st.form("diag_form", clear_on_submit=False):
+    # 1) 資產輸入
+    c1, c2, c3 = st.columns(3)
+    with c1:
+        st.number_input("公司股權（萬元）", min_value=0, step=10, key="diag_equity")
+        st.number_input("現金／存款（萬元）", min_value=0, step=10, key="diag_cash")
+    with c2:
+        st.number_input("不動產（萬元）", min_value=0, step=10, key="diag_realestate")
+        st.number_input("有價證券（萬元）", min_value=0, step=10, key="diag_securities")
+    with c3:
+        st.number_input("其他資產（萬元）", min_value=0, step=10, key="diag_other")
+        st.number_input("既有保單保額（萬元）", min_value=0, step=10, key="diag_insurance_cov")
 
-# ---------------- 基本資料（非 form，輸入即時 rerun） ----------------
-st.markdown('<div class="yc-step"><div class="yc-dot">1</div><div>基本資料</div></div>', unsafe_allow_html=True)
-bc1, bc2, bc3 = st.columns(3)
-with bc1: st.text_input("姓名 *",  key="diag_name")
-with bc2: st.text_input("Email *", key="diag_email")
-with bc3: st.text_input("手機 *",  key="diag_mobile")
+    # 即時計算（在 form 內也可以即時顯示）
+    total_assets = (
+        st.session_state.diag_equity
+        + st.session_state.diag_realestate
+        + st.session_state.diag_cash
+        + st.session_state.diag_securities
+        + st.session_state.diag_other
+    )
+    liq_need = int(round(total_assets * 0.20))  # 交棒流動性需求＝總資產×20%
 
-fc1, fc2, fc3 = st.columns(3)
-with fc1: st.selectbox("婚姻狀況 *", ["未婚","已婚","離婚","喪偶"], key="diag_marital")
-with fc2: st.number_input("子女人數 *", 0, 10, key="diag_children")
-with fc3: st.selectbox("是否已有接班人選 *", ["尚未明確","已明確"], key="diag_heirs")
+    m1, m2 = st.columns(2)
+    with m1:
+        st.markdown(f"<div class='metric'>資產總額（萬元）：<b>{total_assets:,}</b></div>", unsafe_allow_html=True)
+    with m2:
+        st.markdown(f"<div class='metric'>交棒流動性需求（萬元）：<b>{liq_need:,}</b></div>", unsafe_allow_html=True)
 
-st.markdown("<hr style='margin:10px 0 16px; opacity:.15'>", unsafe_allow_html=True)
+    st.markdown("---")
 
-# ---------------- 資產盤點（即時總額 + 交棒流動性需求 20%） ----------------
-st.markdown('<div class="yc-step"><div class="yc-dot">2</div><div>資產盤點（萬元）</div></div>', unsafe_allow_html=True)
-a1, a2, a3, a4 = st.columns(4)
-with a1: st.number_input("公司股權 *",    min_value=0, step=10, key="diag_equity")
-with a2: st.number_input("不動產 *",      min_value=0, step=10, key="diag_re")
-with a3: st.number_input("金融資產 *",    min_value=0, step=10, key="diag_fin", help="現金/存款/基金/股票等")
-with a4: st.number_input("既有保單保額 *", min_value=0, step=10, key="diag_cov")
+    # 2) 重點關注（多選勾選）
+    focus_options = [
+        "交棒流動性需求", "節稅影響", "資產配置", "保障缺口",
+        "股權規劃", "不動產分配", "慈善安排", "現金流穩定"
+    ]
+    st.write("**您的重點關注（可複選）**")
+    diag_focus = st.multiselect(
+        "請勾選您的重點關注（可複選）",
+        options=focus_options,
+        default=st.session_state.diag_focus,
+        key="diag_focus",
+        help="可同時勾選多個重點，以便我們在結果頁提供更貼近需求的建議。"
+    )
 
-total_assets = st.session_state["diag_equity"] + st.session_state["diag_re"] + st.session_state["diag_fin"] + st.session_state["diag_cov"]
-need_liquidity = round(total_assets * 0.20)  # 20%
+    st.markdown("---")
 
-st.caption(f"目前估算總資產：約 **{total_assets:,} 萬**（僅供初步參考）")
-st.info(f"交棒流動性需求（估）：**{need_liquidity:,} 萬**（= 總資產 × 20%）")
+    # 3) 聯絡方式
+    n1, n2, n3 = st.columns(3)
+    with n1:
+        st.text_input("姓名（必填）", key="diag_name")
+    with n2:
+        st.text_input("Email（必填）", key="diag_email")
+    with n3:
+        st.text_input("手機（必填）", key="diag_mobile")
 
-st.markdown("<hr style='margin:10px 0 16px; opacity:.15'>", unsafe_allow_html=True)
+    # 驗證
+    missing = []
+    if not st.session_state.diag_name.strip():   missing.append("姓名")
+    if not st.session_state.diag_email.strip():  missing.append("Email")
+    if not st.session_state.diag_mobile.strip(): missing.append("手機")
 
-# ---------------- 重點關注 ----------------
-st.markdown('<div class="yc-step"><div class="yc-dot">3</div><div>重點關注</div></div>', unsafe_allow_html=True)
-st.multiselect(
-    "請選擇最多 3 項您最在意的議題",
-    options=["節稅安排","現金流穩定","股權交棒","家族治理","風險隔離","資產隔代傳承","慈善安排","文件與合規"],
-    key="diag_focus",           # 只用 key 控制；不給 default=
-    max_selections=3,
-)
-st.slider("希望在幾年內完成主要傳承安排？", 1, 10, key="diag_years")
+    if missing:
+        st.warning("尚未完成項目：" + "、".join(missing))
 
-st.markdown("<hr style='margin:10px 0 16px; opacity:.15'>", unsafe_allow_html=True)
+    submitted = st.form_submit_button("建立個案並查看結果 ➜", type="primary", disabled=bool(missing))
 
-# ---------------- 送出（按鈕鎖定；Enter 不會誤送出） ----------------
-st.checkbox("我了解此為初步診斷，結果僅供參考；若需實務落地將由專業顧問協助。", key="diag_agree")
-
-missing = []
-if not st.session_state["diag_name"].strip():   missing.append("姓名")
-if not st.session_state["diag_email"].strip():  missing.append("Email")
-if not st.session_state["diag_mobile"].strip(): missing.append("手機")
-if total_assets <= 0:                            missing.append("資產盤點")
-if not st.session_state["diag_agree"]:          missing.append("同意聲明")
-
-if missing:
-    st.markdown("<div class='yc-alert'>尚未完成項目：" + "、".join(missing) + "</div>", unsafe_allow_html=True)
-
-submit = st.button("查看診斷結果 ➜", type="primary", use_container_width=True, disabled=bool(missing))
-
-# ---------------- 送出後處理（成功才導頁；把 20% 需求一起寫入） ----------------
-if submit and not missing:
-    case_id = f"CASE-{datetime.now(TPE).strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+# ---------- 提交處理 ----------
+if submitted and not missing:
     ts_local = datetime.now(TPE).strftime("%Y-%m-%d %H:%M:%S %Z")
+    uid = str(uuid.uuid4())[:8].upper()
+    case_id = f"CASE-{datetime.now(TPE).strftime('%Y%m%d')}-{uid}"
 
-    payload = {
-        "ts": ts_local, "case_id": case_id,
-        "name": st.session_state["diag_name"].strip(),
-        "email": st.session_state["diag_email"].strip(),
-        "mobile": st.session_state["diag_mobile"].strip(),
-        "marital": st.session_state["diag_marital"],
-        "children": st.session_state["diag_children"],
-        "heirs_ready": st.session_state["diag_heirs"],
-        "equity": st.session_state["diag_equity"],
-        "real_estate": st.session_state["diag_re"],
-        "financial": st.session_state["diag_fin"],
-        "insurance_cov": st.session_state["diag_cov"],
+    # 整理資料
+    focus_list = st.session_state.diag_focus or []
+    focus_str = "、".join(focus_list)
+
+    case_dict = {
+        "case_id": case_id,
+        "ts": ts_local,
+        "name": st.session_state.diag_name.strip(),
+        "email": st.session_state.diag_email.strip(),
+        "mobile": st.session_state.diag_mobile.strip(),
+        "equity": st.session_state.diag_equity,
+        "real_estate": st.session_state.diag_realestate,
+        "cash": st.session_state.diag_cash,
+        "securities": st.session_state.diag_securities,
+        "other_assets": st.session_state.diag_other,
+        "insurance_coverage": st.session_state.diag_insurance_cov,
         "total_assets": total_assets,
-        # 交棒流動性需求（估）＝總資產 × 20%（寫入 liq_low / liq_high 以利結果頁顯示）
-        "liq_low": need_liquidity,
-        "liq_high": need_liquidity,
-        "focus": "、".join(st.session_state["diag_focus"]),
-        "target_years": st.session_state["diag_years"],
-        "status": "created",
+        "liq_need": liq_need,             # 單一數字（總資產×20%）
+        "focus": focus_str,               # 儲存為逗號樣式（實際用的是頓號）
+        "focus_list": focus_list,         # 也留原始 list（給結果頁用）
     }
-    try:
-        repo.add(payload)
-        st.toast("✅ 已建立個案", icon="✅")
-        st.session_state["__go_result_case"] = case_id  # 單次旗標（只在成功後設置）
-        st.rerun()
-    except Exception as e:
-        st.error(f"寫入個案資料時發生錯誤：{e}")
+
+    # 放到 Session，供第 3 頁用
+    st.session_state["current_case"] = case_dict
+    st.session_state["last_case_id"] = case_id
+
+    # 可選：寫入 CSV（若有 Repo）
+    if CasesRepo and Case:
+        try:
+            repo = CasesRepo()
+            repo.add(Case(**case_dict))
+        except Exception as e:
+            st.info(f"已建立個案（僅 Session），寫入資料檔時出現問題：{e}")
+
+    # 同步傳遞預約預填給第 5 頁（日後若直接去預約）
+    st.session_state["booking_prefill"] = {
+        "case_id": case_id,
+        "name": case_dict["name"],
+        "email": case_dict["email"],
+        "mobile": case_dict["mobile"],
+        "need": f"重點關注：{focus_str}；交棒流動性需求約 {liq_need:,} 萬",
+    }
+
+    # 導向結果頁
+    safe_switch("pages/3_Result.py", "前往結果頁")
+
+st.markdown("</div>", unsafe_allow_html=True)
 
 footer()
