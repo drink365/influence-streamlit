@@ -1,5 +1,6 @@
 # pages/6_Bookings_Admin.py
 import csv
+import io
 from pathlib import Path
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
@@ -9,7 +10,8 @@ import streamlit as st
 from src.ui.footer import footer
 from src.config import ADMIN_KEY, DATA_DIR
 from src.utils import EMAIL_RE, PHONE_RE  # 若要用到驗證可調用
-# 目前 repos.BookingRepo 沒有 update/save_all，這頁面自行處理 CSV 輸出入
+
+# CSV 欄位定義（請與寫入 bookings.csv 時一致）
 HEADERS = ["ts", "name", "phone", "email", "notes", "status"]
 
 TPE = ZoneInfo("Asia/Taipei")
@@ -84,7 +86,7 @@ with st.sidebar:
     st.text_input("請輸入管理密鑰", type="password", key="admin_key_sidebar", on_change=_verify_sidebar)
 
 if not st.session_state.admin_ok:
-    st.warning("此頁需管理密鑰。")
+    st.warning("此頁需管理密鑰。如未設定 secrets，可先用測試密鑰：`demo`。")
     footer(); st.stop()
 
 rows, bookings_path = _read_bookings()
@@ -158,7 +160,6 @@ st.dataframe([{k: r.get(k, "") for k in show_cols} for r in view],
              column_config={"ts_local": "提交時間（台北）"})
 
 # 下載（當前篩選結果）
-import io
 out = io.StringIO()
 w = csv.DictWriter(out, fieldnames=HEADERS + ["ts_local"])
 w.writeheader()
@@ -194,11 +195,11 @@ else:
     target = dict(view[idx])  # 避免直接改 view
     c6, c7 = st.columns(2)
     with c6:
-        new_status = st.selectbox("狀態",
-                                  ["submitted", "contacted", "scheduled", "closed"],
-                                  index=["submitted", "contacted", "scheduled", "closed"].index((target.get("status") or "submitted")))
+        pick_list = ["submitted", "contacted", "scheduled", "closed"]
+        current = (target.get("status") or "submitted")
+        new_status = st.selectbox("狀態", pick_list, index=pick_list.index(current) if current in pick_list else 0)
     with c7:
-        admin_note = st.text_area("管理備註（會寫回 notes 欄位後段）", value="", height=100,
+        admin_note = st.text_area("管理備註（會附加在 notes 後方）", value="", height=100,
                                   placeholder="例如：2025-08-10 已致電，安排 8/15 14:00 視訊")
 
     if st.button("儲存更新", type="primary", use_container_width=True):
@@ -211,7 +212,6 @@ else:
         for i, r in enumerate(rows):
             if same_row(r, target):
                 r["status"] = new_status
-                # 以分隔線追加備註
                 if admin_note.strip():
                     base = r.get("notes","").strip()
                     extra = f"\n---\n[{stamp}] 管理備註：{admin_note.strip()}" if base else f"[{stamp}] 管理備註：{admin_note.strip()}"
@@ -221,6 +221,6 @@ else:
         _write_bookings(rows)
         st.success("已更新並寫回 bookings.csv")
         st.toast("✅ 更新完成", icon="✅")
-        st.experimental_rerun()
-
+        st.rerun()  # ← 改用 st.rerun（1.36 以後）
+        
 footer()
