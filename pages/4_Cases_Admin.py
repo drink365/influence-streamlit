@@ -1,4 +1,7 @@
 import streamlit as st
+from src.ui.theme import inject_css
+inject_css()
+
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
 from pathlib import Path
