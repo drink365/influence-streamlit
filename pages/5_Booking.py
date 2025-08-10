@@ -46,6 +46,12 @@ st.markdown(f"""
     border-radius: 999px !important; font-weight: 700 !important;
   }}
   .yc-muted {{ color:#666; font-size:13px; }}
+  .yc-infobox {{
+    margin-top:.8rem; padding:12px 14px; background:#f7f7f8; border-radius:12px;
+    border:1px solid rgba(0,0,0,.06);
+  }}
+  .yc-kv {{ display:flex; gap:.4rem; margin:.2rem 0; }}
+  .yc-kv b {{ min-width:64px; color:{INK}; }}
 </style>
 """, unsafe_allow_html=True)
 
@@ -85,21 +91,19 @@ if "booking_payload" not in st.session_state:
 
 def success_view():
     p = st.session_state.get("booking_payload", {})
+    # 調整顯示順序：姓名/Email/手機/需求 → 最後呈現提交時間（台北）
     st.markdown(f"""
     <div class="yc-card" style="border-left:6px solid {PRIMARY};">
       <h3 style="margin:.2rem 0 .6rem;">已收到您的預約申請</h3>
       <p class="yc-muted">我們將在 1 個工作日內與您聯繫，確認最適合您的時段。</p>
-      <div style="margin-top:.6rem;">
-        <b>姓名：</b>{p.get('name','—')}　｜　
-        <b>Email：</b>{p.get('email','—')}　｜　
-        <b>手機：</b>{p.get('phone','—')}
-        <div class="yc-muted" style="margin-top:.3rem;">提交時間（台北）：{p.get('ts_local','')}</div>
-      </div>
-      <div style="margin-top:.8rem;">
-        <b>您填寫的需求：</b>
-        <div style="margin-top:.3rem; padding:10px 12px; background:#f7f7f8; border-radius:10px;">
-          { (p.get('request') or p.get('notes') or '—') }
+      <div class="yc-infobox">
+        <div class="yc-kv"><b>姓名：</b><span>{p.get('name','—')}</span></div>
+        <div class="yc-kv"><b>Email：</b><span>{p.get('email','—')}</span></div>
+        <div class="yc-kv"><b>手機：</b><span>{p.get('phone','—')}</span></div>
+        <div class="yc-kv" style="align-items:flex-start;"><b>需求：</b>
+          <span>{(p.get('request') or p.get('notes') or '—').replace('\n','<br>')}</span>
         </div>
+        <div class="yc-muted" style="margin-top:.3rem;">提交時間（台北）：{p.get('ts_local','')}</div>
       </div>
     </div>
     """, unsafe_allow_html=True)
@@ -216,7 +220,8 @@ if submit:
                 """
                 admin_text = (
                     "收到新的預約申請：\n"
-                    f"- 時間（台北）：{ts_local}\n- 姓名：{name}\n- 手機：{phone}\n- Email：{email}\n\n"
+                    f"- 時間（台北）：{ts_local}\n"
+                    f"- 姓名：{name}\n- 手機：{phone}\n- Email：{email}\n\n"
                     "需求內容：\n"
                     f"{request.strip()}\n"
                 )
@@ -236,7 +241,7 @@ if submit:
             "name": name,
             "phone": phone,
             "email": email,
-            "request": request.strip()  # ← 顯示成功頁所需
+            "request": request.strip()
         }
         st.rerun()
 
