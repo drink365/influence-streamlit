@@ -1,4 +1,13 @@
 import streamlit as st
+
+# 啟動時清除所有快取，避免卡在 oven
+try:
+    st.cache_data.clear()
+    st.cache_resource.clear()
+except:
+    pass
+
+
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
