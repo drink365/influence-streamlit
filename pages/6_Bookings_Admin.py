@@ -9,20 +9,17 @@ import streamlit as st
 
 from src.ui.footer import footer
 from src.config import ADMIN_KEY, DATA_DIR
-from src.utils import EMAIL_RE, PHONE_RE  # 若要用到驗證可調用
 
-# CSV 欄位定義（請與寫入 bookings.csv 時一致）
-HEADERS = ["ts", "name", "phone", "email", "notes", "status"]
-
+# CSV 欄位定義（加入 admin_notes，與使用者 notes 分離）
+HEADERS = ["ts", "name", "phone", "email", "notes", "status", "admin_notes"]
 TPE = ZoneInfo("Asia/Taipei")
 
 
 def _parse_dt_any(s: str):
-    """盡量解析我們存的時間格式（台北時間字串）或過去的 ISO 格式。失敗回 None。"""
+    """盡量解析我們存的時間格式（台北字串）或過去的 ISO。失敗回 None。"""
     if not s:
         return None
     s = s.strip()
-    # 先試人類可讀（台北）: 2025-08-10 21:15:01 TST / CST
     for fmt in ("%Y-%m-%d %H:%M:%S %Z", "%Y-%m-%d %H:%M:%S"):
         try:
             dt = datetime.strptime(s, fmt)
@@ -31,7 +28,6 @@ def _parse_dt_any(s: str):
             return dt.astimezone(TPE)
         except Exception:
             pass
-    # 再試 ISO（可能是 UTC）
     try:
         s2 = s.replace("Z", "+00:00")
         dt = datetime.fromisoformat(s2)
@@ -48,7 +44,7 @@ def _read_bookings():
         return [], path
     with path.open("r", newline="", encoding="utf-8") as f:
         rows = list(csv.DictReader(f))
-    # 補齊缺欄位避免 KeyError
+    # 補齊缺欄位避免 KeyError（特別是新加的 admin_notes）
     for r in rows:
         for k in HEADERS:
             r.setdefault(k, "")
@@ -56,7 +52,7 @@ def _read_bookings():
 
 
 def _write_bookings(rows):
-    """直接覆寫 CSV（保留欄位順序）"""
+    """直接覆寫 CSV（保留欄位順序，確保 admin_notes 獨立欄位存在）"""
     path = Path(DATA_DIR) / "bookings.csv"
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", newline="", encoding="utf-8") as f:
@@ -104,7 +100,7 @@ for r in rows:
 st.subheader("篩選條件")
 c1, c2 = st.columns([2,1])
 with c1:
-    kw = st.text_input("關鍵字（姓名 / Email / 手機 / 需求）", "")
+    kw = st.text_input("關鍵字（姓名 / Email / 手機 / 需求 / 管理備註）", "")
 with c2:
     status_opt = ["全部", "submitted", "contacted", "scheduled", "closed"]
     status_pick = st.selectbox("狀態", status_opt, index=0)
@@ -127,7 +123,8 @@ if kw:
             lkw in (r.get("name","").lower())
             or lkw in (r.get("email","").lower())
             or lkw in (r.get("phone","").lower())
-            or lkw in (r.get("notes","").lower())
+            or lkw in (r.get("notes","").lower())          # 用戶需求
+            or lkw in (r.get("admin_notes","").lower())    # 管理備註
         )
     view = [r for r in view if hit(r)]
 
@@ -152,12 +149,16 @@ if date_from or date_to:
 # 排序
 view.sort(key=lambda r: (r.get("_dt_tpe") or datetime.min.replace(tzinfo=TPE)), reverse=sort_desc)
 
-# 顯示
+# 顯示（區分「需求」與「管理備註」）
 st.subheader("名單")
-show_cols = ["ts_local", "name", "email", "phone", "status", "notes"]
+show_cols = ["ts_local", "name", "email", "phone", "status", "notes", "admin_notes"]
 st.dataframe([{k: r.get(k, "") for k in show_cols} for r in view],
              use_container_width=True, height=420,
-             column_config={"ts_local": "提交時間（台北）"})
+             column_config={
+                 "ts_local": "提交時間（台北）",
+                 "notes": "需求（用戶填寫）",
+                 "admin_notes": "管理備註（內部）",
+             })
 
 # 下載（當前篩選結果）
 out = io.StringIO()
@@ -179,48 +180,67 @@ with bookings_path.open("rb") as f:
 
 st.divider()
 
-# 單筆更新（狀態 / 管理備註）
+# 單筆更新（僅更新狀態與管理備註；不動用戶需求）
 st.subheader("單筆更新")
 if not view:
     st.info("沒有資料可供更新。")
 else:
-    # 用「提交時間（台北）＋姓名＋Email」幫你辨識
+    # 以「提交時間（台北）＋姓名＋Email」辨識
     options = [
         f"[{r.get('ts_local','')}] {r.get('name','')} / {r.get('email','')}"
         for r in view
     ]
     idx = st.selectbox("選擇一筆紀錄", list(range(len(view))),
-                       format_func=lambda i: options[i])
+                       format_func=lambda i: options[i],
+                       key="booking_select_idx")
 
     target = dict(view[idx])  # 避免直接改 view
     c6, c7 = st.columns(2)
     with c6:
         pick_list = ["submitted", "contacted", "scheduled", "closed"]
         current = (target.get("status") or "submitted")
-        new_status = st.selectbox("狀態", pick_list, index=pick_list.index(current) if current in pick_list else 0)
-    with c7:
-        admin_note = st.text_area("管理備註（會附加在 notes 後方）", value="", height=100,
-                                  placeholder="例如：2025-08-10 已致電，安排 8/15 14:00 視訊")
+        new_status = st.selectbox("狀態", pick_list,
+                                  index=pick_list.index(current) if current in pick_list else 0,
+                                  key=f"status_pick_{idx}")
 
-    if st.button("儲存更新", type="primary", use_container_width=True):
-        # 把原 rows 找到同一筆（以 ts+email+phone 近似比對；若重複再以 index 輔助）
+    # 左側顯示「需求（唯讀）」；右側編輯「管理備註（內部）」
+    left, right = st.columns([1,1])
+    with left:
+        st.markdown("**需求（用戶填寫）**")
+        st.text_area("",
+                     value=(target.get("notes") or ""),
+                     height=160,
+                     key=f"user_notes_view_{idx}",
+                     disabled=True)
+    with right:
+        st.markdown("**管理備註（內部）**")
+        admin_note_key = f"admin_note_edit_{idx}"
+        # 以選取索引作為 key，切換選項時內容會跟著變動
+        admin_note_val = st.text_area("",
+                                      value=(target.get("admin_notes") or ""),
+                                      height=160,
+                                      key=admin_note_key,
+                                      placeholder="例如：2025-08-10 已致電，安排 8/15 14:00 視訊")
+
+    if st.button("儲存更新", type="primary", use_container_width=True, key=f"save_btn_{idx}"):
+        # 把原 rows 找到同一筆（以 ts+email+phone 近似比對）
         def same_row(a, b):
             return (a.get("ts")==b.get("ts") and a.get("email")==b.get("email") and a.get("phone")==b.get("phone"))
 
-        # 準備寫回：在 notes 後面追加管理備註，附加時間戳（台北）
         stamp = datetime.now(TPE).strftime("%Y-%m-%d %H:%M:%S %Z")
         for i, r in enumerate(rows):
             if same_row(r, target):
                 r["status"] = new_status
-                if admin_note.strip():
-                    base = r.get("notes","").strip()
-                    extra = f"\n---\n[{stamp}] 管理備註：{admin_note.strip()}" if base else f"[{stamp}] 管理備註：{admin_note.strip()}"
-                    r["notes"] = (base + extra)
+                # 覆寫「管理備註」為右側的內容，不再追加到 notes
+                r["admin_notes"] = st.session_state.get(admin_note_key, "").strip()
+                # 也可選擇自動附帶時間戳：開啟下一行
+                # r["admin_notes"] = f"[{stamp}] {r['admin_notes']}" if r["admin_notes"] else ""
                 rows[i] = r
                 break
+
         _write_bookings(rows)
         st.success("已更新並寫回 bookings.csv")
         st.toast("✅ 更新完成", icon="✅")
-        st.rerun()  # ← 改用 st.rerun（1.36 以後）
-        
+        st.rerun()
+
 footer()
