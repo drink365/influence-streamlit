@@ -1,6 +1,9 @@
 # pages/6_Bookings_Admin.py
 import csv
 import io
+from src.ui.theme import inject_css
+inject_css()
+
 from pathlib import Path
 from datetime import datetime, timezone
 from zoneinfo import ZoneInfo
