@@ -23,7 +23,7 @@ with st.sidebar:
     st.text_input("請輸入管理密鑰", type="password", key="admin_key_sidebar", on_change=_verify_sidebar)
 
 if not st.session_state.admin_ok:
-    st.warning("此頁需管理密鑰。如未設定 secrets，可先用測試密鑰：`demo`。")
+    st.warning("此頁需管理密鑰。")
     footer(); st.stop()
 
 rows = repo.get_all()
