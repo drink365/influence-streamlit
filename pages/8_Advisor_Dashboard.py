@@ -3,15 +3,23 @@ import pandas as pd
 
 from src.services.share import create_share
 from src.repos.share_repo import ShareRepo
+from src.services.auth import is_logged_in, current_role
 
 st.set_page_config(page_title="顧問面板", page_icon="🧭", layout="wide")
 
 st.title("🧭 顧問 Dashboard")
 
-# 簡易身份（之後接登入）
-advisor_id = st.session_state.get("advisor_id", "guest")
-advisor_name = st.session_state.get("advisor_name", "未登入")
-st.caption(f"目前身份：{advisor_name}（{advisor_id}）")
+# 要求登入
+if not is_logged_in():
+    st.warning("此頁需登入。請先到 Login 頁完成 Email OTP 登入。")
+    st.page_link("pages/Login.py", label="➡️ 前往登入", icon="🔐")
+    st.stop()
+
+advisor_id = st.session_state.get("advisor_id")
+advisor_name = st.session_state.get("advisor_name")
+role = current_role()
+
+st.caption(f"目前身份：{advisor_name}（{advisor_id}）｜角色：{role}")
 
 with st.form("create_share"):
     st.subheader("建立分享連結")
@@ -22,7 +30,7 @@ with st.form("create_share"):
 if submitted:
     try:
         data = create_share(case_id, advisor_id, days_valid=int(days_valid))
-        base_url = st.secrets.get("APP_BASE_URL", "")  # 選配部署網址
+        base_url = st.secrets.get("APP_BASE_URL", "")
         link = (base_url.rstrip('/') + f"/Share?token={data['token']}") if base_url else f"Share?token={data['token']}"
         st.success("已建立連結！")
         st.code(link, language="text")
@@ -30,6 +38,7 @@ if submitted:
         st.error(f"建立失敗：{e}")
 
 st.divider()
+
 st.subheader("我發出的分享連結")
 rows = ShareRepo.list_by_advisor(advisor_id)
 if not rows:
@@ -48,4 +57,4 @@ else:
     } for r in rows])
     st.dataframe(df, use_container_width=True)
 
-st.caption("*提示：可在 .streamlit/secrets.toml 設定 APP_BASE_URL 讓分享連結顯示完整網址。*")
+st.caption("*提示：若要總覽全站，請使用 admin 角色登入。*")
