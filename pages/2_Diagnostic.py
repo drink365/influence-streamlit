@@ -59,7 +59,7 @@ try:
 except Exception as e:
     st.error(f"無法建立資料夾 data/：{e}")
 
-repo = CaseRepo()  # 診斷頁只用來 add()，不會呼叫 get_by_case_id
+repo = CaseRepo()  # 診斷頁只做 add()
 
 # ---------------- Hero 區 ----------------
 st.markdown('<div class="yc-hero">', unsafe_allow_html=True)
@@ -167,7 +167,7 @@ if submitted:
         }
 
         try:
-            repo.add(payload)  # 診斷頁只進行新增
+            repo.add(payload)                  # 寫入 cases.csv
             st.toast("✅ 已建立個案", icon="✅")
             st.session_state["diag_last_case"] = case_id
             st.session_state["last_case_id"] = case_id  # 給結果頁用
