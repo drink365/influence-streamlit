@@ -1,249 +1,231 @@
 # pages/6_Bookings_Admin.py
-import csv
-import io
-from src.ui.theme import inject_css
-inject_css()
-
-from pathlib import Path
-from datetime import datetime, timezone
+from __future__ import annotations
+from datetime import datetime
 from zoneinfo import ZoneInfo
-
+from io import StringIO
 import streamlit as st
 
+from src.ui.theme import inject_css
 from src.ui.footer import footer
-from src.config import ADMIN_KEY, DATA_DIR
+from src.repos.bookings import BookingsRepo
 
-# CSV 欄位定義（加入 admin_notes，與使用者 notes 分離）
-HEADERS = ["ts", "name", "phone", "email", "notes", "status", "admin_notes"]
+st.set_page_config(page_title="預約管理後台", page_icon="🗂️", layout="wide")
+inject_css()
 TPE = ZoneInfo("Asia/Taipei")
 
+# ---------------- 樣式 ----------------
+st.markdown("""
+<style>
+  .yc-card { background:#fff; border-radius:16px; padding:18px;
+             border:1px solid rgba(0,0,0,.06); box-shadow:0 6px 22px rgba(0,0,0,.05); }
+  .yc-hero { background:linear-gradient(180deg,#F7F7F8 0%,#FFF 100%);
+             border-radius:20px; padding:24px 28px; }
+  .yc-badge { display:inline-block; padding:6px 10px; border-radius:999px;
+              background:rgba(168,135,22,0.14); color:#A88716; font-size:12px; font-weight:700;
+              border:1px solid rgba(168,135,22,0.27); }
+  .yc-alert { background:#fff9f0; border:1px solid #facc15; color:#92400e;
+              padding:8px 12px; border-radius:10px; font-size:13px; border-radius:10px; }
+  .pill { display:inline-block; padding:2px 8px; border-radius:999px; font-size:12px; margin-right:6px; }
+  .pill-new { background:#fef3c7; color:#92400e; border:1px solid #fcd34d; }
+  .pill-contacted { background:#e0f2fe; color:#075985; border:1px solid #7dd3fc; }
+  .pill-scheduled { background:#ecfccb; color:#365314; border:1px solid #bef264; }
+  .pill-done { background:#e9ffe7; color:#166534; border:1px solid #86efac; }
+  .pill-cancelled { background:#fee2e2; color:#991b1b; border:1px solid #fca5a5; }
+</style>
+""", unsafe_allow_html=True)
 
-def _parse_dt_any(s: str):
-    """盡量解析我們存的時間格式（台北字串）或過去的 ISO。失敗回 None。"""
-    if not s:
-        return None
-    s = s.strip()
-    for fmt in ("%Y-%m-%d %H:%M:%S %Z", "%Y-%m-%d %H:%M:%S"):
-        try:
-            dt = datetime.strptime(s, fmt)
-            if dt.tzinfo is None:
-                dt = dt.replace(tzinfo=TPE)
-            return dt.astimezone(TPE)
-        except Exception:
-            pass
+# ---------------- 登入驗證 ----------------
+st.markdown('<div class="yc-hero">', unsafe_allow_html=True)
+st.markdown('<span class="yc-badge">管理後台</span>', unsafe_allow_html=True)
+st.subheader("預約管理")
+st.caption("僅限內部使用。")
+st.markdown("</div>", unsafe_allow_html=True)
+st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+expected_pass = st.secrets.get("BOOKINGS_ADMIN_PASS") or st.secrets.get("ADMIN_PASS") or ""
+if not expected_pass:
+    st.warning("尚未設定管理密碼（請於 Secrets 設定 `BOOKINGS_ADMIN_PASS` 或 `ADMIN_PASS`）。")
+    footer(); st.stop()
+
+pw_col, _ = st.columns([1, 4])
+with pw_col:
+    pwd = st.text_input("管理密碼", type="password", key="bookings_admin_pw")
+    if st.button("登入", use_container_width=True):
+        if pwd == expected_pass:
+            st.session_state["bookings_admin_authed"] = True
+            st.rerun()
+        else:
+            st.error("密碼錯誤。")
+
+if not st.session_state.get("bookings_admin_authed"):
+    footer(); st.stop()
+
+# ---------------- 資料存取 ----------------
+repo = BookingsRepo()
+rows = repo.list_all()  # List[Dict]
+
+# 標準化/排序（預設照建立時間新到舊）
+def parse_ts(s: str):
     try:
-        s2 = s.replace("Z", "+00:00")
-        dt = datetime.fromisoformat(s2)
-        if dt.tzinfo is None:
-            dt = dt.replace(tzinfo=timezone.utc)
-        return dt.astimezone(TPE)
+        return datetime.strptime(s, "%Y-%m-%d %H:%M:%S %Z")
     except Exception:
-        return None
+        return datetime.min.replace(tzinfo=TPE)
 
+rows.sort(key=lambda r: parse_ts(r.get("ts", "")), reverse=True)
 
-def _read_bookings():
-    path = Path(DATA_DIR) / "bookings.csv"
-    if not path.exists():
-        return [], path
-    with path.open("r", newline="", encoding="utf-8") as f:
-        rows = list(csv.DictReader(f))
-    # 補齊缺欄位避免 KeyError（特別是新加的 admin_notes）
-    for r in rows:
-        for k in HEADERS:
-            r.setdefault(k, "")
-    return rows, path
+# ---------------- 篩選/搜尋列 ----------------
+with st.container():
+    f1, f2, f3, f4 = st.columns([1.8, 2.2, 1.2, 1.2])
+    with f1:
+        q = st.text_input("搜尋（姓名 / Email / 手機 / 個案編號 / 預約編號）", key="bk_q")
+    with f2:
+        all_status = ["new", "contacted", "scheduled", "done", "cancelled"]
+        def_status = ["new", "contacted", "scheduled"]
+        status_sel = st.multiselect("狀態", options=all_status, default=def_status, key="bk_status_sel")
+    with f3:
+        sort_opt = st.selectbox("排序", ["建立時間（新→舊）", "建立時間（舊→新）"], index=0)
+    with f4:
+        show_limit = st.number_input("每頁筆數", min_value=10, max_value=200, step=10, value=50)
 
+def match_row(r: dict, q: str) -> bool:
+    if not q: return True
+    q = q.lower().strip()
+    for k in ["booking_id", "case_id", "name", "email", "mobile", "preferred_time", "need"]:
+        v = (r.get(k) or "").lower()
+        if q in v:
+            return True
+    return False
 
-def _write_bookings(rows):
-    """直接覆寫 CSV（保留欄位順序，確保 admin_notes 獨立欄位存在）"""
-    path = Path(DATA_DIR) / "bookings.csv"
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("w", newline="", encoding="utf-8") as f:
-        w = csv.DictWriter(f, fieldnames=HEADERS)
-        w.writeheader()
-        for r in rows:
-            w.writerow({k: r.get(k, "") for k in HEADERS})
-    return path
-
-
-# ----------------- UI -----------------
-st.title("預約名單（管理）")
-
-# 狀態與驗證
-if "admin_ok" not in st.session_state:
-    st.session_state.admin_ok = False
-
-def _verify_sidebar():
-    st.session_state.admin_ok = (st.session_state.get("admin_key_sidebar", "") == ADMIN_KEY)
-    if st.session_state.admin_ok:
-        st.toast("已通過驗證，正在載入資料…", icon="✅")
-    else:
-        st.toast("密鑰錯誤", icon="❌")
-
-with st.sidebar:
-    st.subheader("管理密鑰")
-    st.text_input("請輸入管理密鑰", type="password", key="admin_key_sidebar", on_change=_verify_sidebar)
-
-if not st.session_state.admin_ok:
-    st.warning("此頁需管理密鑰。")
-    footer(); st.stop()
-
-rows, bookings_path = _read_bookings()
-if not rows:
-    st.info("目前尚無預約資料。")
-    footer(); st.stop()
-
-# 預處理：加上台北時間顯示與排序鍵
-for r in rows:
-    dt = _parse_dt_any(r.get("ts", ""))
-    r["_dt_tpe"] = dt
-    r["ts_local"] = dt.strftime("%Y-%m-%d %H:%M:%S %Z") if dt else (r.get("ts") or "")
-
-# 篩選條件
-st.subheader("篩選條件")
-c1, c2 = st.columns([2,1])
-with c1:
-    kw = st.text_input("關鍵字（姓名 / Email / 手機 / 需求 / 管理備註）", "")
-with c2:
-    status_opt = ["全部", "submitted", "contacted", "scheduled", "closed"]
-    status_pick = st.selectbox("狀態", status_opt, index=0)
-
-c3, c4, c5 = st.columns([1,1,1])
-with c3:
-    sort_desc = st.toggle("依時間新→舊", value=True)
-with c4:
-    date_from = st.date_input("起日（台北）", value=None)
-with c5:
-    date_to = st.date_input("迄日（台北）", value=None)
-
-view = rows
-
-# 關鍵字
-if kw:
-    lkw = kw.lower()
-    def hit(r):
-        return (
-            lkw in (r.get("name","").lower())
-            or lkw in (r.get("email","").lower())
-            or lkw in (r.get("phone","").lower())
-            or lkw in (r.get("notes","").lower())          # 用戶需求
-            or lkw in (r.get("admin_notes","").lower())    # 管理備註
-        )
-    view = [r for r in view if hit(r)]
-
-# 狀態
-if status_pick != "全部":
-    view = [r for r in view if (r.get("status") or "").lower() == status_pick]
-
-# 日期區間（以台北時間解析）
-if date_from or date_to:
-    def in_range(r):
-        dt = r.get("_dt_tpe")
-        if not dt:
-            return False
-        ok = True
-        if date_from:
-            ok = ok and (dt.date() >= date_from)
-        if date_to:
-            ok = ok and (dt.date() <= date_to)
-        return ok
-    view = [r for r in view if in_range(r)]
+# 篩選
+filtered = [r for r in rows if r.get("status") in status_sel and match_row(r, q)]
 
 # 排序
-view.sort(key=lambda r: (r.get("_dt_tpe") or datetime.min.replace(tzinfo=TPE)), reverse=sort_desc)
+if sort_opt == "建立時間（舊→新）":
+    filtered = list(reversed(filtered))
 
-# 顯示（區分「需求」與「管理備註」）
-st.subheader("名單")
-show_cols = ["ts_local", "name", "email", "phone", "status", "notes", "admin_notes"]
-st.dataframe([{k: r.get(k, "") for k in show_cols} for r in view],
-             use_container_width=True, height=420,
-             column_config={
-                 "ts_local": "提交時間（台北）",
-                 "notes": "需求（用戶填寫）",
-                 "admin_notes": "管理備註（內部）",
-             })
+# 分頁
+total = len(filtered)
+page = st.session_state.get("bk_page", 1)
+max_page = max(1, (total + show_limit - 1) // show_limit)
+page = min(max(page, 1), max_page)
+st.session_state["bk_page"] = page
+start = (page - 1) * show_limit
+end = start + show_limit
+page_rows = filtered[start:end]
 
-# 下載（當前篩選結果）
-out = io.StringIO()
-w = csv.DictWriter(out, fieldnames=HEADERS + ["ts_local"])
-w.writeheader()
-for r in view:
-    row = {k: r.get(k, "") for k in HEADERS}
-    row["ts_local"] = r.get("ts_local", "")
-    w.writerow(row)
-st.download_button("下載目前篩選結果（CSV）", data=out.getvalue().encode("utf-8"),
-                   file_name="bookings_filtered.csv", mime="text/csv",
-                   use_container_width=True)
+# ---------------- 清單 ----------------
+st.markdown('<div class="yc-card">', unsafe_allow_html=True)
+st.markdown(f"**共 {total} 筆**（第 {page} / {max_page} 頁）")
 
-# 下載原始 bookings.csv
-with bookings_path.open("rb") as f:
-    st.download_button("下載全部 bookings.csv", data=f.read(),
-                       file_name="bookings.csv", mime="text/csv",
-                       use_container_width=True)
+# 簡易標籤
+def badge(s: str) -> str:
+    cls = {
+        "new": "pill-new",
+        "contacted": "pill-contacted",
+        "scheduled": "pill-scheduled",
+        "done": "pill-done",
+        "cancelled": "pill-cancelled",
+    }.get(s, "pill")
+    return f"<span class='pill {cls}'>{s}</span>"
 
-st.divider()
+# 表格（精簡欄位）
+import pandas as pd
+tbl = pd.DataFrame([
+    {
+        "預約編號": r.get("booking_id", ""),
+        "時間": r.get("ts", ""),
+        "狀態": r.get("status", ""),
+        "姓名": r.get("name", ""),
+        "Email": r.get("email", ""),
+        "手機": r.get("mobile", ""),
+        "個案編號": r.get("case_id", ""),
+        "偏好時段": r.get("preferred_time", ""),
+    }
+    for r in page_rows
+])
 
-# 單筆更新（僅更新狀態與管理備註；不動用戶需求）
-st.subheader("單筆更新")
-if not view:
-    st.info("沒有資料可供更新。")
-else:
-    # 以「提交時間（台北）＋姓名＋Email」辨識
-    options = [
-        f"[{r.get('ts_local','')}] {r.get('name','')} / {r.get('email','')}"
-        for r in view
-    ]
-    idx = st.selectbox("選擇一筆紀錄", list(range(len(view))),
-                       format_func=lambda i: options[i],
-                       key="booking_select_idx")
+st.dataframe(
+    tbl,
+    use_container_width=True,
+    hide_index=True,
+)
 
-    target = dict(view[idx])  # 避免直接改 view
-    c6, c7 = st.columns(2)
-    with c6:
-        pick_list = ["submitted", "contacted", "scheduled", "closed"]
-        current = (target.get("status") or "submitted")
-        new_status = st.selectbox("狀態", pick_list,
-                                  index=pick_list.index(current) if current in pick_list else 0,
-                                  key=f"status_pick_{idx}")
-
-    # 左側顯示「需求（唯讀）」；右側編輯「管理備註（內部）」
-    left, right = st.columns([1,1])
-    with left:
-        st.markdown("**需求（用戶填寫）**")
-        st.text_area("",
-                     value=(target.get("notes") or ""),
-                     height=160,
-                     key=f"user_notes_view_{idx}",
-                     disabled=True)
-    with right:
-        st.markdown("**管理備註（內部）**")
-        admin_note_key = f"admin_note_edit_{idx}"
-        # 以選取索引作為 key，切換選項時內容會跟著變動
-        admin_note_val = st.text_area("",
-                                      value=(target.get("admin_notes") or ""),
-                                      height=160,
-                                      key=admin_note_key,
-                                      placeholder="例如：2025-08-10 已致電，安排 8/15 14:00 視訊")
-
-    if st.button("儲存更新", type="primary", use_container_width=True, key=f"save_btn_{idx}"):
-        # 把原 rows 找到同一筆（以 ts+email+phone 近似比對）
-        def same_row(a, b):
-            return (a.get("ts")==b.get("ts") and a.get("email")==b.get("email") and a.get("phone")==b.get("phone"))
-
-        stamp = datetime.now(TPE).strftime("%Y-%m-%d %H:%M:%S %Z")
-        for i, r in enumerate(rows):
-            if same_row(r, target):
-                r["status"] = new_status
-                # 覆寫「管理備註」為右側的內容，不再追加到 notes
-                r["admin_notes"] = st.session_state.get(admin_note_key, "").strip()
-                # 也可選擇自動附帶時間戳：開啟下一行
-                # r["admin_notes"] = f"[{stamp}] {r['admin_notes']}" if r["admin_notes"] else ""
-                rows[i] = r
-                break
-
-        _write_bookings(rows)
-        st.success("已更新並寫回 bookings.csv")
-        st.toast("✅ 更新完成", icon="✅")
+# 分頁控制
+c_prev, c_info, c_next = st.columns([1, 4, 1])
+with c_prev:
+    if st.button("上一頁", disabled=(page <= 1), use_container_width=True):
+        st.session_state["bk_page"] = max(1, page - 1)
         st.rerun()
+with c_info:
+    st.caption(f"顯示 {start+1}-{min(end, total)} / 共 {total}")
+with c_next:
+    if st.button("下一頁", disabled=(page >= max_page), use_container_width=True):
+        st.session_state["bk_page"] = min(max_page, page + 1)
+        st.rerun()
+
+# 匯出 CSV（匯出目前篩選結果）
+csv_buf = StringIO()
+pd.DataFrame(filtered).to_csv(csv_buf, index=False, encoding="utf-8")
+st.download_button(
+    "下載目前篩選結果（CSV）",
+    data=csv_buf.getvalue().encode("utf-8"),
+    file_name=f"bookings_filtered_{datetime.now(TPE).strftime('%Y%m%d_%H%M')}.csv",
+    mime="text/csv",
+    use_container_width=True,
+)
+st.markdown("</div>", unsafe_allow_html=True)
+
+st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+
+# ---------------- 詳細 / 狀態更新 ----------------
+st.markdown('<div class="yc-card">', unsafe_allow_html=True)
+st.markdown("### 詳細與狀態更新")
+
+if not page_rows:
+    st.info("目前沒有符合條件的預約。")
+else:
+    ids = [r.get("booking_id", "") for r in page_rows]
+    idx = st.selectbox("選擇一筆預約編號", options=ids, index=0)
+    cur = next((r for r in page_rows if r.get("booking_id") == idx), None)
+
+    if cur:
+        st.markdown("---")
+        c1, c2 = st.columns(2)
+        with c1:
+            st.write(f"**預約編號**：{cur.get('booking_id','')}")
+            st.write(f"**建立時間**：{cur.get('ts','')}")
+            st.write(f"**個案編號**：{cur.get('case_id','—') or '—'}")
+            st.write(f"**姓名**：{cur.get('name','')}")
+            st.write(f"**Email**：{cur.get('email','')}")
+            st.write(f"**手機**：{cur.get('mobile','')}")
+            st.write(f"**偏好時段**：{cur.get('preferred_time','') or '—'}")
+        with c2:
+            st.write("**需求**：")
+            st.markdown(f"<div style='white-space:pre-wrap'>{(cur.get('need') or '').strip()}</div>", unsafe_allow_html=True)
+
+        st.markdown("---")
+        st.write("**更新狀態**")
+        new_status = st.radio(
+            "選擇新的狀態",
+            options=["new", "contacted", "scheduled", "done", "cancelled"],
+            index=["new", "contacted", "scheduled", "done", "cancelled"].index(cur.get("status","new")),
+            horizontal=True,
+            key="bk_status_radio",
+        )
+        act_cols = st.columns([1,1,4])
+        with act_cols[0]:
+            if st.button("儲存狀態", type="primary", use_container_width=True):
+                ok = repo.update_status(cur.get("booking_id",""), new_status)
+                if ok:
+                    st.success("已更新狀態。")
+                    st.rerun()
+                else:
+                    st.error("更新失敗，請稍後再試。")
+        with act_cols[1]:
+            if st.button("回到清單頂部", use_container_width=True):
+                st.session_state["bk_page"] = 1
+                st.rerun()
+
+st.markdown("</div>", unsafe_allow_html=True)
 
 footer()
