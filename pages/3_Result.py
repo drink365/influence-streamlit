@@ -1,67 +1,48 @@
 import streamlit as st
-from src.ui.theme import inject_css
-inject_css()
+from utils.case_repository import CaseRepository
 
-from src.ui.footer import footer
-from src.repos.cases import CaseRepo
-from src.services.reports import build_docx, build_txt
+st.set_page_config(page_title="規劃結果", page_icon="📊")
 
-st.title("診斷結果（簡版）")
-repo = CaseRepo()
+st.title("📊 規劃結果")
 
-case_id = st.text_input("輸入 CaseID 查詢", value=st.session_state.get("last_case_id", ""))
+case_id = st.session_state.get("case_id")
+repo = CaseRepository()
+
 if not case_id:
-    st.info("尚無資料。請先完成『快速診斷』產生 CaseID。")
-    footer(); st.stop()
+    st.warning("尚未有可顯示的案例，請先回到首頁填寫資料。")
+    st.stop()
 
-# 讀取
-case = repo.get_by_id(case_id)
+case = repo.get_by_case_id(case_id)
+
 if not case:
-    st.warning("查無此 CaseID，請確認輸入是否正確。")
-    footer(); st.stop()
+    st.error("找不到對應的案例資料。")
+    st.stop()
 
-# 轉型顯示
-nums = ["children","equity","real_estate","financial","insurance_cov",
-        "total_assets","liq_low","liq_high","gap_low","gap_high"]
-for k in nums:
-    if case.get(k):
-        try: case[k] = int(float(case[k]))
-        except: pass
-case["focus"] = [x for x in (case.get("focus") or "").split("|") if x]
+st.subheader("📝 基本資料")
+st.write(f"- 姓名：**{case.get('name', '')}**")
+st.write(f"- 年齡：**{case.get('age', '')} 歲**")
+st.write(f"- 性別：**{case.get('gender', '')}**")
+st.write(f"- 預算：**{case.get('budget', '')} 萬**")
+st.write(f"- 需求：**{case.get('needs', '')}**")
 
-st.markdown(f"**個案編號：** `{case_id}`  \n**申請人：** {case.get('name') or '（未填）'}")
-st.divider()
+st.subheader("💡 初步規劃建議")
 
-st.subheader("一、風險重點")
-st.write(f"- 資產總額（估）：**{case['total_assets']:,} 萬**")
-st.write(f"- 交棒流動性需求（估）：**{case['liq_low']:,}–{case['liq_high']:,} 萬**")
-st.write(f"- 現有保單保額：**{case['insurance_cov']:,} 萬**")
-st.write(f"- 可能的保障缺口範圍：**{case['gap_low']:,}–{case['gap_high']:,} 萬**")
-st.caption("說明：以上為示意試算，實際仍需依照家庭目標、法規與細部資產結構調整。")
+# 交棒流動性需求數字處理
+liq_low = case.get('liq_low')
+liq_high = case.get('liq_high')
 
-st.subheader("二、動作與下載")
-c1, c2 = st.columns(2)
-with c1:
-    if st.button("回到診斷"):
-        st.switch_page("pages/2_Diagnostic.py")
-with c2:
-    docx_bytes = build_docx(case_id, case)
-    if docx_bytes:
-        st.download_button(
-            label="下載簡版報告（.docx）",
-            data=docx_bytes,
-            file_name=f"{case_id}_report.docx",
-            mime="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
-            use_container_width=True
-        )
-    else:
-        txt_bytes = build_txt(case_id, case)
-        st.download_button(
-            label="下載簡版報告（.txt）",
-            data=txt_bytes,
-            file_name=f"{case_id}_report.txt",
-            mime="text/plain",
-            use_container_width=True
-        )
+if isinstance(liq_low, (int, float)) and isinstance(liq_high, (int, float)):
+    st.write(f"- 交棒流動性需求（估）：**{liq_low:,}–{liq_high:,} 萬**")
+else:
+    st.write("- 交棒流動性需求（估）：資料不足")
 
-footer()
+# 其他規劃
+suggestions = case.get("suggestions", [])
+if suggestions:
+    for idx, sug in enumerate(suggestions, start=1):
+        st.write(f"{idx}. {sug}")
+else:
+    st.info("目前尚無具體規劃建議。")
+
+st.markdown("---")
+st.write("📌 本結果僅供參考，詳細規劃需與顧問進一步討論。")
