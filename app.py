@@ -20,6 +20,10 @@ DATA_DIR = Path("data")
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 CASES_CSV = DATA_DIR / "cases.csv"
 
+# === 預約資料檔 ===
+BOOKINGS_CSV = DATA_DIR / "bookings.csv"
+BOOKINGS_HEADERS = ["ts","name","phone","email","notes","status"]
+
 # 可選套件（不裝也能跑）
 try:
     import pandas as pd
@@ -126,6 +130,86 @@ def load_case(case_id: str):
     else:
         last["focus"] = []
     return last
+
+def append_booking_row(row: dict):
+    need_header = not BOOKINGS_CSV.exists()
+    with BOOKINGS_CSV.open("a", newline="", encoding="utf-8") as f:
+        w = csv.DictWriter(f, fieldnames=BOOKINGS_HEADERS)
+        if need_header:
+            w.writeheader()
+        w.writerow({k: row.get(k, "") for k in BOOKINGS_HEADERS})
+
+# ---------- 寄信：Gmail / Google Workspace ----------
+def send_email_smtp(to_addrs, subject, html_body, text_body=None, cc_addrs=None, bcc_addrs=None):
+    """
+    使用 Gmail / Google Workspace 寄信。
+    需要在 Streamlit Secrets 設定：
+      SMTP_HOST=smtp.gmail.com
+      SMTP_PORT=587 或 465
+      SMTP_USER=123@gracefo.com
+      SMTP_PASS=（Google「應用程式密碼」16碼）
+      MAIL_FROM=123@gracefo.com
+      MAIL_FROM_NAME=永傳家族辦公室（可選）
+      MAIL_REPLY_TO=service@gracefo.com（可選）
+    """
+    # 讀取必要設定
+    try:
+        smtp_host = st.secrets["SMTP_HOST"]
+        smtp_port = int(st.secrets.get("SMTP_PORT", 587))
+        smtp_user = st.secrets["SMTP_USER"]
+        smtp_pass = st.secrets["SMTP_PASS"]
+        mail_from = st.secrets.get("MAIL_FROM", smtp_user)
+    except Exception:
+        return False, "SMTP secrets not configured"
+
+    # 顯示名稱與回覆位址（可選）
+    from_name = st.secrets.get("MAIL_FROM_NAME", "永傳家族辦公室")
+    reply_to = st.secrets.get("MAIL_REPLY_TO")
+
+    # 收件人正規化
+    if isinstance(to_addrs, str):
+        to_addrs = [to_addrs]
+    if cc_addrs and isinstance(cc_addrs, str):
+        cc_addrs = [cc_addrs]
+    if bcc_addrs and isinstance(bcc_addrs, str):
+        bcc_addrs = [bcc_addrs]
+
+    # 組信
+    from email.mime.multipart import MIMEMultipart
+    from email.mime.text import MIMEText
+    msg = MIMEMultipart("alternative")
+    msg["Subject"] = subject
+    msg["From"] = f"{from_name} <{mail_from}>"
+    msg["To"] = ", ".join(to_addrs)
+    if cc_addrs:
+        msg["Cc"] = ", ".join(cc_addrs)
+    if reply_to:
+        msg["Reply-To"] = reply_to
+
+    if text_body:
+        msg.attach(MIMEText(text_body, "plain", "utf-8"))
+    msg.attach(MIMEText(html_body, "html", "utf-8"))
+
+    recipients = to_addrs + (cc_addrs or []) + (bcc_addrs or [])
+
+    # 寄送
+    import smtplib
+    try:
+        if smtp_port == 465:
+            server = smtplib.SMTP_SSL(smtp_host, smtp_port, timeout=20)
+        else:
+            server = smtplib.SMTP(smtp_host, smtp_port, timeout=20)
+            server.ehlo()
+            try:
+                server.starttls()
+            except Exception:
+                pass
+        server.login(smtp_user, smtp_pass)
+        server.sendmail(mail_from, recipients, msg.as_string())
+        server.quit()
+        return True, "sent"
+    except Exception as e:
+        return False, str(e)
 
 # ---------- 報告輸出 ----------
 def build_docx_bytes(case_id: str, case: dict) -> bytes | None:
@@ -443,6 +527,19 @@ def page_cases():
                 mime="text/csv", use_container_width=True
             )
 
+    # （可選）管理者工具：發送測試郵件
+    with st.expander("管理者工具：寄信測試（SMTP）"):
+        test_to = st.text_input("測試收件人", value=st.secrets.get("MAIL_TO_ADMIN", ""))
+        if st.button("發送測試郵件"):
+            ok, msg = send_email_smtp(
+                to_addrs=test_to or st.secrets.get("MAIL_TO_ADMIN", ""),
+                subject="【測試】SMTP 設定成功",
+                html_body="<p>這是一封測試信，代表 SMTP 設定成功。</p>",
+                text_body="這是一封測試信，代表 SMTP 設定成功。"
+            )
+            if ok: st.success("測試信已送出。")
+            else: st.error(f"寄送失敗：{msg}")
+
     footer()
 
 def page_book():
@@ -543,7 +640,6 @@ def page_book():
                         st.warning("管理者通知未寄出，請檢查 MAIL_TO_ADMIN 或 SMTP 設定。")
 
     footer()
-
 
 def page_advisors():
     st.title("顧問專區（MVP）")
