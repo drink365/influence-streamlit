@@ -1,0 +1,7 @@
+[theme]
+base="light"
+primaryColor="#0A6C74"        # 品牌主綠藍
+backgroundColor="#FFFFFF"
+secondaryBackgroundColor="#F5F7F9"
+textColor="#1A1A1A"
+font="sans serif"
