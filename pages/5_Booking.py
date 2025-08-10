@@ -5,7 +5,7 @@ import smtplib, ssl
 from email.message import EmailMessage
 import uuid
 import streamlit as st
-import sys, os
+import sys
 from pathlib import Path
 
 # ---- 確保可以匯入 src/* 模組（不依賴 src.sys_path）----
@@ -46,6 +46,16 @@ st.markdown("""
 </style>
 """, unsafe_allow_html=True)
 
+# ---------- 成功／重置旗標（一定要在任何元件渲染前處理） ----------
+# 若上一輪提交成功，這裡會顯示成功畫面，且不渲染表單
+success_id = st.session_state.pop("__booking_success", None)
+
+# 若上一輪要求清空欄位，先在這輪開始時安全清空，再移除旗標
+if st.session_state.get("__reset_booking_pending"):
+    for k in ["booking_case_id", "booking_name", "booking_email", "booking_mobile", "booking_time", "booking_need"]:
+        st.session_state[k] = ""  # 清成空字串，型別與 text_input 相容
+    st.session_state.pop("__reset_booking_pending", None)
+
 # ---------- 接收預填資料 ----------
 prefill = st.session_state.pop("booking_prefill", None)   # 來自 3_Result.py 的資料
 user_data = st.session_state.get("user_data", {})         # 相容舊流程
@@ -75,6 +85,28 @@ if prefill:
 st.session_state["booking_name"]   = st.session_state["booking_name"]   or user_data.get("name", "")
 st.session_state["booking_email"]  = st.session_state["booking_email"]  or user_data.get("email", "")
 st.session_state["booking_mobile"] = st.session_state["booking_mobile"] or user_data.get("phone", "")
+
+# ---------- 若剛提交成功：顯示成功畫面並結束本輪（避免再渲染表單造成混亂） ----------
+if success_id:
+    st.markdown('<div class="yc-hero">', unsafe_allow_html=True)
+    st.markdown('<span class="yc-badge">預約成功</span>', unsafe_allow_html=True)
+    st.subheader("我們已收到您的預約申請")
+    st.caption(f"預約編號：{success_id}")
+    st.markdown("</div>", unsafe_allow_html=True)
+
+    st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+    st.success("我們將盡快與您聯繫。")
+
+    a, b = st.columns([1,1])
+    with a:
+        if st.button("回首頁", use_container_width=True):
+            st.switch_page("app.py")
+    with b:
+        if st.button("返回診斷", use_container_width=True):
+            st.switch_page("pages/2_Diagnostic.py")
+
+    footer()
+    st.stop()
 
 # ---------- Hero ----------
 st.markdown('<div class="yc-hero">', unsafe_allow_html=True)
@@ -189,18 +221,10 @@ if submit and not missing:
     except Exception as e:
         st.warning(f"通知信寄送失敗：{e}")
 
-    # 3) 成功訊息 & 清空欄位
-    st.success(f"已收到預約申請（編號：{booking_id}），我們將盡快與您聯繫。")
-    for k, v in defaults.items():
-        st.session_state[k] = v
-
-    a, b = st.columns([1,1])
-    with a:
-        if st.button("回首頁", use_container_width=True):
-            st.switch_page("app.py")
-    with b:
-        if st.button("返回診斷", use_container_width=True):
-            st.switch_page("pages/2_Diagnostic.py")
+    # 3) 標記成功與延遲清空 → 重新執行一輪
+    st.session_state["__booking_success"] = booking_id
+    st.session_state["__reset_booking_pending"] = True
+    st.rerun()
 
 st.markdown("</div>", unsafe_allow_html=True)
 
