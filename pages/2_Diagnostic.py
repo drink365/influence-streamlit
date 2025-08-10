@@ -1,8 +1,8 @@
-# pages/3_Result.py
+# pages/2_Diagnostic.py
+import uuid
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from pathlib import Path
-import math, csv
 
 import streamlit as st
 
@@ -11,7 +11,8 @@ from src.ui.theme import inject_css
 from src.repos.cases import CaseRepo
 from src.config import DATA_DIR
 
-st.set_page_config(page_title="診斷結果", page_icon="📊", layout="wide")
+# ---------------- 基本設定 / 風格 ----------------
+st.set_page_config(page_title="60 秒傳承風險診斷", page_icon="🧭", layout="wide")
 inject_css()
 
 PRIMARY = "#BD0E1B"
@@ -20,141 +21,160 @@ INK     = "#3C3F46"
 BG_SOFT = "#F7F7F8"
 TPE = ZoneInfo("Asia/Taipei")
 
-# ---------- 小工具 ----------
-def to_num(x, default=0):
-    try:
-        if x is None: return default
-        if isinstance(x, (int, float)): return float(x)
-        s = str(x).replace(",", "").strip()
-        if s == "": return default
-        return float(s)
-    except Exception:
-        return default
-
-def fmt_num(x, unit="萬"):
-    try:
-        v = float(x)
-        if math.isnan(v) or v <= 0: return "—"
-        return f"{v:,.0f} {unit}"
-    except Exception:
-        return "—"
-
-def band(low, high, unit="萬"):
-    if (low is None and high is None) or (to_num(low) <= 0 and to_num(high) <= 0):
-        return "—"
-    return f"{fmt_num(low, unit)} – {fmt_num(high, unit)}"
-
-def latest_case_from_csv():
-    """直接讀 data/cases.csv，回傳最後一筆（若有）。"""
-    path = Path(DATA_DIR) / "cases.csv"
-    if not path.exists(): 
-        return None
-    try:
-        with path.open("r", encoding="utf-8", newline="") as f:
-            rows = list(csv.DictReader(f))
-        return rows[-1] if rows else None
-    except Exception:
-        return None
-
-# ---------- 準備資料 ----------
-Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
-repo = CaseRepo()
-
-# 三重保險：session -> CSV 最新 -> 失敗提示
-case_id = st.session_state.get("last_case_id")
-case = repo.get_by_case_id(case_id) if case_id else None
-if not case:
-    case = latest_case_from_csv()
-    case_id = case.get("case_id") if case else None
-    if case_id:
-        # 補寫到 session，之後重整也能用
-        st.session_state["last_case_id"] = case_id
-
-st.title("診斷結果")
-
-if not case:
-    st.warning("尚未取得個案編號。請先完成診斷。")
-    if st.button("前往診斷", use_container_width=True):
-        st.switch_page("pages/2_Diagnostic.py")
-    footer(); st.stop()
-
-# ---------- 取值（全部數值先安全轉型） ----------
-equity        = to_num(case.get("equity"))
-real_estate   = to_num(case.get("real_estate"))
-financial     = to_num(case.get("financial"))
-insurance_cov = to_num(case.get("insurance_cov"))
-total_assets  = to_num(case.get("total_assets", equity + real_estate + financial + insurance_cov))
-
-# 流動性需求（預設 5~10%）
-liq_low_calc  = total_assets * 0.05
-liq_high_calc = total_assets * 0.10
-liq_low  = to_num(case.get("liq_low", liq_low_calc))
-liq_high = to_num(case.get("liq_high", liq_high_calc))
-gap = max(liq_high - insurance_cov, 0)
-
-# ---------- Hero 卡片 ----------
 st.markdown(f"""
 <style>
-  .yc-card {{
-    background:#fff; border-radius:16px; padding:18px 18px;
-    border:1px solid rgba(0,0,0,.06); box-shadow:0 6px 22px rgba(0,0,0,.05);
+  .yc-hero {{
+    background: linear-gradient(180deg, {BG_SOFT} 0%, #FFFFFF 100%);
+    border: 1px solid rgba(0,0,0,0.04);
+    border-radius: 20px;
+    padding: 24px 28px;
+    box-shadow: 0 8px 30px rgba(0,0,0,0.06);
   }}
-  .yc-hero {{ background:linear-gradient(180deg,{BG_SOFT} 0%,#FFF 100%); border-radius:20px; padding:24px 28px; }}
-  .yc-badge {{ display:inline-block; padding:6px 10px; border-radius:999px; background:{ACCENT}14; color:{ACCENT}; font-size:12px; font-weight:700; border:1px solid {ACCENT}44; }}
+  .yc-hero h1 {{ margin: .2rem 0 .5rem; font-size: 28px; color: {INK}; }}
+  .yc-hero p {{ color: #555; margin: 0; }}
+  .yc-badge {{
+    display:inline-block; padding:6px 10px; border-radius:999px;
+    background:{ACCENT}14; color:{ACCENT}; font-size:12px; font-weight:700;
+    border:1px solid {ACCENT}44; letter-spacing:.3px;
+  }}
+  .yc-card {{
+    background: #fff; border-radius: 16px; padding: 18px 18px;
+    border: 1px solid rgba(0,0,0,0.06); box-shadow: 0 6px 22px rgba(0,0,0,0.05);
+  }}
+  .yc-step {{ display:flex; gap:.6rem; align-items:center; margin:.4rem 0 1rem; color:#374151; font-weight:700; }}
+  .yc-dot  {{ width:26px; height:26px; border-radius:999px; background:{PRIMARY}11; border:1px solid {PRIMARY}55; display:flex; align-items:center; justify-content:center; font-size:12px; color:{PRIMARY}; }}
+  .yc-cta button[kind="primary"] {{ background:{PRIMARY} !important; border-color:{PRIMARY} !important; border-radius:999px !important; font-weight:700 !important; }}
+  .yc-muted {{ color:#666; font-size:13px; }}
 </style>
 """, unsafe_allow_html=True)
 
+# --------- 若上一輪已要求跳轉，先處理（避免在 form 回調中 switch 失效） ---------
+if st.session_state.get("__go_result__", False):
+    st.session_state["__go_result__"] = False
+    st.switch_page("pages/3_Result.py")
+
+# ---------------- 檔案/Repo 安全 ----------------
+try:
+    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+except Exception as e:
+    st.error(f"無法建立資料夾 data/：{e}")
+
+repo = CaseRepo()  # 診斷頁只用來 add()，不會呼叫 get_by_case_id
+
+# ---------------- Hero 區 ----------------
 st.markdown('<div class="yc-hero">', unsafe_allow_html=True)
-st.markdown('<span class="yc-badge">診斷摘要</span>', unsafe_allow_html=True)
-st.subheader(f"{case.get('name','—')} 的傳承重點")
-st.caption(f"個案編號：{case_id or '—'} ｜ 建立時間：{case.get('ts','—')}")
+st.markdown('<span class="yc-badge">快速診斷</span>', unsafe_allow_html=True)
+st.markdown("<h1>60 秒傳承風險診斷</h1>", unsafe_allow_html=True)
+st.markdown("<p>填完即可看到您的風險重點、建議流動性與保障缺口。完成後可產出簡版報告。</p>", unsafe_allow_html=True)
 st.markdown("</div>", unsafe_allow_html=True)
 
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
-# ---------- 兩欄重點卡 ----------
-c1, c2 = st.columns(2)
+# ---------------- 表單狀態 ----------------
+if "diag_last_case" not in st.session_state:
+    st.session_state.diag_last_case = None
 
-with c1:
-    st.markdown('<div class="yc-card">', unsafe_allow_html=True)
-    st.markdown("#### 1) 資產概覽（萬元）")
-    st.write(f"- 公司股權：**{fmt_num(equity)}**")
-    st.write(f"- 不動產：**{fmt_num(real_estate)}**")
-    st.write(f"- 金融資產：**{fmt_num(financial)}**")
-    st.write(f"- 既有保單保額：**{fmt_num(insurance_cov)}**")
-    st.write("---")
-    st.write(f"**合計**：{fmt_num(total_assets)}")
+# ---------------- 表單開始（只用 form_submit_button；不混用 st.button） ----------------
+with st.form("diag_form", clear_on_submit=False):
+    # Step 1：基本資料
+    st.markdown('<div class="yc-step"><div class="yc-dot">1</div><div>基本資料</div></div>', unsafe_allow_html=True)
+    base_c1, base_c2, base_c3 = st.columns([1,1,1])
+    with base_c1:
+        name = st.text_input("姓名 *", placeholder="王大明")
+    with base_c2:
+        email = st.text_input("Email *", placeholder="name@example.com")
+    with base_c3:
+        mobile = st.text_input("手機 *", placeholder="+886 9xx xxx xxx")
+
+    fam_c1, fam_c2, fam_c3 = st.columns([1,1,1])
+    with fam_c1:
+        marital = st.selectbox("婚姻狀況 *", ["未婚","已婚","離婚","喪偶"])
+    with fam_c2:
+        children = st.number_input("子女人數 *", min_value=0, max_value=10, step=1, value=0)
+    with fam_c3:
+        heirs_ready = st.selectbox("是否已有接班人選 *", ["尚未明確","已明確"])
+
+    st.markdown("<hr style='margin:10px 0 16px; opacity:.15'>", unsafe_allow_html=True)
+
+    # Step 2：資產盤點（金額單位：萬元）
+    st.markdown('<div class="yc-step"><div class="yc-dot">2</div><div>資產盤點（萬元）</div></div>', unsafe_allow_html=True)
+    a1, a2, a3, a4 = st.columns(4)
+    with a1:
+        equity = st.number_input("公司股權 *", min_value=0, step=10, value=0)
+    with a2:
+        real_estate = st.number_input("不動產 *", min_value=0, step=10, value=0)
+    with a3:
+        financial = st.number_input("金融資產 *", min_value=0, step=10, value=0, help="現金/存款/基金/股票等")
+    with a4:
+        insurance_cov = st.number_input("既有保單保額 *", min_value=0, step=10, value=0)
+
+    total_assets = equity + real_estate + financial + insurance_cov
+    st.caption(f"目前估算總資產：約 **{total_assets:,} 萬**（僅供初步參考）")
+
+    st.markdown("<hr style='margin:10px 0 16px; opacity:.15'>", unsafe_allow_html=True)
+
+    # Step 3：重點關注
+    st.markdown('<div class="yc-step"><div class="yc-dot">3</div><div>重點關注</div></div>', unsafe_allow_html=True)
+    focus = st.multiselect(
+        "請選擇最多 3 項您最在意的議題",
+        options=["節稅安排","現金流穩定","股權交棒","家族治理","風險隔離","資產隔代傳承","慈善安排","文件與合規"],
+        default=["節稅安排","股權交棒"],
+        max_selections=3,
+    )
+    target_years = st.slider("希望在幾年內完成主要傳承安排？", 1, 10, 3)
+
+    # Step 4：送出
+    st.markdown("<hr style='margin:10px 0 16px; opacity:.15'>", unsafe_allow_html=True)
+    st.markdown('<div class="yc-step"><div class="yc-dot">4</div><div>送出診斷</div></div>', unsafe_allow_html=True)
+    agree = st.checkbox("我了解此為初步診斷，結果僅供參考；若需實務落地將由專業顧問協助。", value=True)
+
+    st.markdown("<div class='yc-cta'>", unsafe_allow_html=True)
+    submitted = st.form_submit_button("查看診斷結果 ➜", type="primary", use_container_width=True)
     st.markdown("</div>", unsafe_allow_html=True)
 
-with c2:
-    st.markdown('<div class="yc-card">', unsafe_allow_html=True)
-    st.markdown("#### 2) 初步建議")
-    st.write(f"- 交棒流動性需求（估）：**{band(liq_low, liq_high)}**")
-    st.write(f"- 當前保障缺口（參考）：**{fmt_num(gap)}**")
-    focuses = (case.get("focus") or "").strip()
-    if focuses:
-        st.write(f"- 您的重點關注：**{focuses}**")
-    st.markdown("</div>", unsafe_allow_html=True)
+# ---------------- 提交後處理 ----------------
+if submitted:
+    missing = []
+    if not name.strip(): missing.append("姓名")
+    if not email.strip(): missing.append("Email")
+    if not mobile.strip(): missing.append("手機")
+    if total_assets <= 0: missing.append("資產盤點")
+    if not agree: missing.append("同意聲明")
 
-st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
+    if missing:
+        st.error("請完成必填項目： " + "、".join(missing))
+    else:
+        case_id = f"CASE-{datetime.now(TPE).strftime('%Y%m%d')}-{str(uuid.uuid4())[:8].upper()}"
+        ts_local = datetime.now(TPE).strftime("%Y-%m-%d %H:%M:%S %Z")
 
-# ---------- 下一步 ----------
-st.markdown('<div class="yc-card">', unsafe_allow_html=True)
-st.markdown("### 下一步")
-st.markdown(
-    """
-- 若交棒時程在 **3 年內**，建議優先規劃 **流動性來源**（現金／信用額度／保單現金價值／資產重整）、**節稅與合規文件**（遺囑、信託、股權安排）。
-- 若保障缺口大於 0，可評估以 **風險保障** 或 **資產配置** 補強，降低家族現金流風險。
-- 若您需要進一步的落地方案，我們可在 30 分鐘會談中依您的目標提供具體路徑與時程。
-    """
-)
-cta1, cta2 = st.columns([1,1])
-with cta1:
-    if st.button("預約 30 分鐘會談", type="primary", use_container_width=True):
-        st.switch_page("pages/5_Booking.py")
-with cta2:
-    if st.button("回首頁", use_container_width=True):
-        st.switch_page("app.py")
-st.markdown("</div>", unsafe_allow_html=True)
+        payload = {
+            "ts": ts_local,
+            "case_id": case_id,
+            "name": name.strip(),
+            "email": email.strip(),
+            "mobile": mobile.strip(),
+            "marital": marital,
+            "children": children,
+            "heirs_ready": heirs_ready,
+            "equity": equity,
+            "real_estate": real_estate,
+            "financial": financial,
+            "insurance_cov": insurance_cov,
+            "total_assets": total_assets,
+            "focus": "、".join(focus),
+            "target_years": target_years,
+            "status": "created",
+        }
 
+        try:
+            repo.add(payload)  # 診斷頁只進行新增
+            st.toast("✅ 已建立個案", icon="✅")
+            st.session_state["diag_last_case"] = case_id
+            st.session_state["last_case_id"] = case_id  # 給結果頁用
+            st.session_state["__go_result__"] = True    # 導頁旗標
+            st.rerun()
+        except Exception as e:
+            st.error(f"寫入個案資料時發生錯誤：{e}")
+
+# ---------------- 頁尾 ----------------
 footer()
