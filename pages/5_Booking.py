@@ -1,14 +1,22 @@
 # pages/5_Booking.py
 import streamlit as st
+from pathlib import Path
 from src.ui.footer import footer
 from src.utils import valid_email, valid_phone, utc_now_iso
 from src.repos.bookings import BookingRepo
 from src.services.mailer import send_email
-from src.config import SMTP
+from src.config import SMTP, DATA_DIR
 
 st.title("預約 30 分鐘線上會談")
 
-# ✅ 已移除：任何 Google Calendar / Calendly 內嵌，避免暴露可用時段
+# ✅ 不嵌任何公開行事曆，避免暴露可用時段
+st.info("請留下您的聯絡方式與需求，我們將盡快與您聯繫確認時段。")
+
+# --- 保險建立 data/ 目錄（雙重保護：即使 repo 層會建，這裡再確保一次） ---
+try:
+    Path(DATA_DIR).mkdir(parents=True, exist_ok=True)
+except Exception:
+    pass
 
 repo = BookingRepo()
 
@@ -20,7 +28,7 @@ if "booking_payload" not in st.session_state:
 
 def show_success_view():
     payload = st.session_state.get("booking_payload", {})
-    st.success("已收到預約申請，我們將盡快與您聯繫。")
+    st.success("已收到您的預約申請，我們將盡快與您聯繫。")
     with st.container(border=True):
         st.markdown(
             f"**姓名**：{payload.get('name','—')}　｜　**Email**：{payload.get('email','—')}　｜　**手機**：{payload.get('phone','—')}"
@@ -37,14 +45,14 @@ if st.session_state.booking_success:
     st.stop()
 
 # ---- 表單（提交即處理；成功後切換到成功畫面）----
-st.subheader("留下您的聯絡方式，我們會回覆您：")
+st.subheader("留下您的聯絡方式")
 with st.form("book_form", clear_on_submit=False):
     name = st.text_input("姓名 *")
     phone = st.text_input("手機 *")
     email = st.text_input("Email *")
-    notes = st.text_area("想先告訴我們的情況（選填）")
+    notes = st.text_area("需求與背景（選填）")
 
-    # 必填檢查（沒填完就停用）
+    # 必填檢查（未填齊停用）
     disabled = not (name.strip() and phone.strip() and email.strip())
     submit = st.form_submit_button("送出預約申請", disabled=disabled, use_container_width=True)
 
@@ -60,7 +68,7 @@ with st.form("book_form", clear_on_submit=False):
             with st.spinner("正在送出…"):
                 ts = utc_now_iso()
 
-                # 2) 一定先寫入 CSV（若出錯會提示）
+                # 2) 一定先寫入 CSV（若失敗 → 顯示錯誤）
                 try:
                     repo.add({
                         "ts": ts,
@@ -75,7 +83,7 @@ with st.form("book_form", clear_on_submit=False):
                     wrote_ok = False
                     st.error(f"寫入預約資料時發生錯誤：{e}")
 
-                # 3) 寄信（寫檔成功才嘗試；SMTP 設定不完整也不會中斷）
+                # 3) 寄信（寫檔成功才嘗試；SMTP 失敗不阻斷）
                 if wrote_ok:
                     user_subject = "已收到您的預約申請｜永傳家族辦公室"
                     user_html = f"""
@@ -97,7 +105,7 @@ with st.form("book_form", clear_on_submit=False):
                     try:
                         send_email(email.strip(), user_subject, user_html, user_text)
                     except Exception:
-                        pass  # 寄信失敗不阻斷
+                        pass
 
                     admin_to = SMTP.get("to_admin")
                     if admin_to:
