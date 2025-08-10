@@ -8,7 +8,7 @@ SCHEMA_SQL = """
 PRAGMA journal_mode=WAL;
 
 CREATE TABLE IF NOT EXISTS cases (
-  id TEXT PRIMARY KEY,             -- Case ID（CASE-YYYYMMDD-XXXX）
+  id TEXT PRIMARY KEY,
   advisor_id TEXT,
   advisor_name TEXT,
   client_alias TEXT,
@@ -19,8 +19,8 @@ CREATE TABLE IF NOT EXISTS cases (
   net_estate REAL,
   tax_estimate REAL,
   liquidity_needed REAL,
-  status TEXT DEFAULT 'Prospect',  -- Prospect/In Progress/Won/Lost
-  payload_json TEXT,               -- 原始計算與參數 JSON
+  status TEXT DEFAULT 'Prospect',
+  payload_json TEXT,
   created_at TEXT,
   updated_at TEXT
 );
@@ -39,9 +39,21 @@ CREATE TABLE IF NOT EXISTS bookings (
 CREATE TABLE IF NOT EXISTS events (
   id INTEGER PRIMARY KEY AUTOINCREMENT,
   case_id TEXT,
-  event TEXT,         -- e.g. DIAG_DONE, REPORT_UNLOCKED, WON_REPORTED
-  meta TEXT,          -- JSON
+  event TEXT,
+  meta TEXT,
   created_at TEXT
+);
+
+-- 新增：分享連結
+CREATE TABLE IF NOT EXISTS shares (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  token TEXT UNIQUE,
+  case_id TEXT,
+  advisor_id TEXT,
+  created_at TEXT,
+  expires_at TEXT,
+  opened_at TEXT,
+  accepted_at TEXT
 );
 """
 
