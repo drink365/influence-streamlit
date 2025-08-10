@@ -1,14 +1,12 @@
 # pages/5_Booking.py
 from datetime import datetime
 from zoneinfo import ZoneInfo
-from pathlib import Path
 import smtplib, ssl
 from email.message import EmailMessage
 import streamlit as st
 
 from src.ui.footer import footer
 from src.ui.theme import inject_css
-from src.config import DATA_DIR
 
 st.set_page_config(page_title="預約會談", page_icon="📅", layout="wide")
 inject_css()
@@ -31,29 +29,33 @@ st.markdown("""
 
 # ---------- 接收結果頁帶來的預填資料 ----------
 prefill = st.session_state.pop("booking_prefill", None)
-# 設定 booking_* 的預設值（只在第一次進頁面時）
+
+# 先建立預設 keys（僅第一次）
 defaults = {
+    "booking_case_id": "",
     "booking_name": "",
     "booking_email": "",
     "booking_mobile": "",
+    "booking_time": "",
     "booking_need": "",
-    "booking_time": "",  # 使用者可自行輸入偏好時段（或改為 selectbox/日曆）
 }
 for k, v in defaults.items():
     st.session_state.setdefault(k, v)
 
-# 有從結果頁帶來的就覆蓋一次（只這次），之後使用者的編輯不被覆蓋
+# 有預填就覆蓋一次
 if prefill:
-    st.session_state["booking_name"]   = prefill.get("name",   st.session_state["booking_name"])
-    st.session_state["booking_email"]  = prefill.get("email",  st.session_state["booking_email"])
-    st.session_state["booking_mobile"] = prefill.get("mobile", st.session_state["booking_mobile"])
-    if prefill.get("need"):
-        st.session_state["booking_need"] = prefill["need"]
+    if prefill.get("case_id"): st.session_state["booking_case_id"] = prefill["case_id"]
+    if prefill.get("name"):    st.session_state["booking_name"]    = prefill["name"]
+    if prefill.get("email"):   st.session_state["booking_email"]   = prefill["email"]
+    if prefill.get("mobile"):  st.session_state["booking_mobile"]  = prefill["mobile"]
+    if prefill.get("need"):    st.session_state["booking_need"]    = prefill["need"]
 
 # ---------- Hero ----------
 st.markdown('<div class="yc-hero">', unsafe_allow_html=True)
 st.markdown('<span class="yc-badge">預約會談</span>', unsafe_allow_html=True)
 st.subheader("留下您的聯絡方式，我們會盡快與您確認時段")
+if st.session_state.get("booking_case_id"):
+    st.caption(f"個案編號：{st.session_state['booking_case_id']}")
 st.markdown("</div>", unsafe_allow_html=True)
 st.markdown("<div style='height:12px'></div>", unsafe_allow_html=True)
 
@@ -118,16 +120,18 @@ def send_mail(subject: str, html_body: str):
 
 if submit and not missing:
     ts = datetime.now(TPE).strftime("%Y-%m-%d %H:%M:%S %Z")
+    case_id = st.session_state["booking_case_id"].strip()
     name   = st.session_state["booking_name"].strip()
     email  = st.session_state["booking_email"].strip()
     mobile = st.session_state["booking_mobile"].strip()
     when   = st.session_state["booking_time"].strip() or "（使用者未填）"
     need   = st.session_state["booking_need"].strip()
 
-    # 給顧問的通知信
+    # 給顧問的通知信（含個案編號）
     admin_html = f"""
     <h3>新的預約申請</h3>
     <p><b>時間：</b>{ts}</p>
+    <p><b>個案編號：</b>{(case_id or '—')}</p>
     <p><b>姓名：</b>{name}</p>
     <p><b>Email：</b>{email}</p>
     <p><b>手機：</b>{mobile}</p>
@@ -139,13 +143,11 @@ if submit and not missing:
     except Exception as e:
         st.warning(f"通知信寄送失敗：{e}")
 
-    # 使用者畫面顯示成功（不再顯示表單標題段落）
+    # 成功訊息 & 清空欄位
     st.success("已收到預約申請，我們將盡快與您聯繫。")
-    # 清空欄位（避免上一筆內容殘留）
     for k in list(defaults.keys()):
         st.session_state[k] = defaults[k]
 
-    # 提供快速返回
     a, b = st.columns([1,1])
     with a:
         if st.button("回首頁", use_container_width=True):
