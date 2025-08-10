@@ -1,0 +1,22 @@
+{
+  "versions": [
+    {
+      "version": "estate-tax-app-v1",
+      "effective_from": "2024-01-01",
+      "unit_factor": 10000,
+      "exempt_amount_wan": 1333,
+      "funeral_expense_wan": 138,
+      "spouse_deduction_wan": 553,
+      "adult_child_deduction_wan": 56,
+      "parents_deduction_wan": 138,
+      "disabled_deduction_wan": 693,
+      "other_dependents_deduction_wan": 56,
+      "buffer_multiplier": 1.10,
+      "brackets_wan": [
+        [5621, 0.10],
+        [11242, 0.15],
+        ["inf", 0.20]
+      ]
+    }
+  ]
+}
