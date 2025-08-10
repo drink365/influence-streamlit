@@ -9,18 +9,18 @@ from src.repos.bookings import BookingRepo
 from src.services.mailer import send_email
 from src.utils import valid_email, valid_phone
 from src.config import SMTP, DATA_DIR
-from src.ui.theme import inject_css  # 若尚未建立 theme.py，請把這行改掉或加入前述檔案
+from src.ui.theme import inject_css  # 若尚未建立 theme.py，請先加入
 
-# --------- 基本設定與品牌色（取自 logo 的色調） ----------
+# --------- 品牌配色 ----------
 PRIMARY = "#BD0E1B"   # 品牌紅
 ACCENT  = "#A88716"   # 金色
-INK    = "#3C3F46"    # 深灰
+INK     = "#3C3F46"   # 深灰
 BG_SOFT = "#F7F7F8"
 
 st.set_page_config(page_title="預約諮詢｜永傳家族辦公室", page_icon="📅", layout="wide")
 inject_css()
 
-# 追加一點品牌化 CSS（不動原功能）
+# 追加品牌化 CSS
 st.markdown(f"""
 <style>
   .yc-hero {{
@@ -49,7 +49,7 @@ st.markdown(f"""
 </style>
 """, unsafe_allow_html=True)
 
-# --------- Logo 與 Hero ----------
+# --------- Logo + Hero ----------
 logo_h = Path("assets/logo-horizontal.png")
 logo_v = Path("assets/logo-vertical.png")
 logo_src = str(logo_h) if logo_h.exists() else (str(logo_v) if logo_v.exists() else None)
@@ -95,6 +95,12 @@ def success_view():
         <b>手機：</b>{p.get('phone','—')}
         <div class="yc-muted" style="margin-top:.3rem;">提交時間（台北）：{p.get('ts_local','')}</div>
       </div>
+      <div style="margin-top:.8rem;">
+        <b>您填寫的需求：</b>
+        <div style="margin-top:.3rem; padding:10px 12px; background:#f7f7f8; border-radius:10px;">
+          { (p.get('request') or p.get('notes') or '—') }
+        </div>
+      </div>
     </div>
     """, unsafe_allow_html=True)
     st.markdown("<div style='height:10px'></div>", unsafe_allow_html=True)
@@ -106,7 +112,7 @@ if st.session_state.booking_submitted:
     footer()
     st.stop()
 
-# --------- 表單（分兩欄、卡片式、四欄位皆必填） ----------
+# --------- 表單（四欄位必填） ----------
 st.markdown('<div class="yc-card">', unsafe_allow_html=True)
 st.write("### 聯絡方式")
 st.caption("以下四項皆為必填；正確聯絡方式能協助我們更快與您確認時段。")
@@ -194,7 +200,6 @@ if submit:
             except Exception as e:
                 st.toast(f"⚠️ 客戶信寄送錯誤：{e}", icon="⚠️")
 
-            # 管理者通知（若設定）
             admin_to = SMTP.get("to_admin")
             if admin_to:
                 admin_subject = "【新預約】30 分鐘會談申請"
@@ -224,12 +229,16 @@ if submit:
                 except Exception as e:
                     st.toast(f"⚠️ 管理者信寄送錯誤：{e}", icon="⚠️")
 
-            # 切換到成功畫面（隱藏表單）
-            st.session_state.booking_submitted = True
-            st.session_state.booking_payload = {
-                "ts_local": ts_local, "name": name, "phone": phone, "email": email
-            }
-            st.rerun()
+        # 切換到成功畫面（把需求一起存入 session）
+        st.session_state.booking_submitted = True
+        st.session_state.booking_payload = {
+            "ts_local": ts_local,
+            "name": name,
+            "phone": phone,
+            "email": email,
+            "request": request.strip()  # ← 顯示成功頁所需
+        }
+        st.rerun()
 
 # --------- 頁尾 ----------
 footer()
