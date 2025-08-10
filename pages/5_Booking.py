@@ -1,8 +1,10 @@
-# pages/5_Booking.py
 import streamlit as st
 from pathlib import Path
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from src.ui.footer import footer
-from src.utils import valid_email, valid_phone, utc_now_iso
+from src.utils import valid_email, valid_phone
 from src.repos.bookings import BookingRepo
 from src.services.mailer import send_email
 from src.config import SMTP, DATA_DIR
@@ -16,6 +18,7 @@ except Exception as e:
     st.error(f"無法建立資料夾 data/：{e}")
 
 repo = BookingRepo()
+TPE = ZoneInfo("Asia/Taipei")
 
 # 狀態：是否已送出（送出後隱藏表單）
 if "booking_submitted" not in st.session_state:
@@ -30,8 +33,8 @@ def show_success_view():
         st.markdown(
             f"**姓名**：{p.get('name','—')}　｜　**Email**：{p.get('email','—')}　｜　**手機**：{p.get('phone','—')}"
         )
-        if p.get("ts"):
-            st.caption(f"提交時間（UTC）：{p['ts']}")
+        if p.get("ts_local"):
+            st.caption(f"提交時間（台北）：{p['ts_local']}")
     st.divider()
     if st.button("回首頁", use_container_width=True):
         st.switch_page("app.py")
@@ -46,9 +49,9 @@ st.info("請留下您的聯絡方式與需求（四項皆為必填），我們�
 
 # 表單（按鈕永遠可按；提交後才檢查）
 with st.form("book_form", clear_on_submit=False):
-    name  = st.text_input("姓名 *", placeholder="請輸入姓名")
-    email = st.text_input("Email *", placeholder="name@example.com")
-    phone = st.text_input("手機 *", placeholder="+886 9xx xxx xxx")
+    name    = st.text_input("姓名 *", placeholder="請輸入姓名")
+    email   = st.text_input("Email *", placeholder="name@example.com")
+    phone   = st.text_input("手機 *", placeholder="+886 9xx xxx xxx")
     request = st.text_area("需求（請簡述想討論的主題）*", placeholder="請至少輸入 10 個字說明您的需求")
 
     submit = st.form_submit_button("送出預約申請", use_container_width=True)
@@ -71,12 +74,13 @@ with st.form("book_form", clear_on_submit=False):
         elif errors:
             st.error("請修正欄位格式： " + "、".join(errors))
         else:
-            ts = utc_now_iso()
+            # 以台北時間記錄與顯示
+            ts_local = datetime.now(TPE).strftime("%Y-%m-%d %H:%M:%S %Z")
 
             # 2) 寫入 CSV（若失敗，顯示錯誤並不進入成功畫面）
             try:
                 repo.add({
-                    "ts": ts,
+                    "ts": ts_local,  # 直接存「台北時間字串」
                     "name": name.strip(),
                     "phone": phone.strip(),
                     "email": email.strip(),
@@ -97,7 +101,7 @@ with st.form("book_form", clear_on_submit=False):
                     <p>{name} 您好，</p>
                     <p>已收到您的 30 分鐘線上會談預約申請，我們將盡快與您聯繫。</p>
                     <ul>
-                      <li>時間：收到申請（UTC）{ts}</li>
+                      <li>時間（台北）：{ts_local}</li>
                       <li>手機：{phone}</li>
                       <li>Email：{email}</li>
                     </ul>
@@ -108,7 +112,7 @@ with st.form("book_form", clear_on_submit=False):
                 """
                 user_text = (
                     f"{name} 您好：\n\n已收到您的 30 分鐘線上會談預約申請，我們將盡快與您聯繫。\n"
-                    f"- 時間（UTC）：{ts}\n- 手機：{phone}\n- Email：{email}\n\n"
+                    f"- 時間（台北）：{ts_local}\n- 手機：{phone}\n- Email：{email}\n\n"
                     "您填寫的需求：\n"
                     f"{request.strip()}\n\n"
                     "若您有補充資訊，歡迎直接回覆此信。\n— 永傳家族辦公室"
@@ -129,7 +133,7 @@ with st.form("book_form", clear_on_submit=False):
                     admin_html = f"""
                         <p>收到新的預約申請：</p>
                         <ul>
-                          <li>時間（UTC）：{ts}</li>
+                          <li>時間（台北）：{ts_local}</li>
                           <li>姓名：{name}</li>
                           <li>手機：{phone}</li>
                           <li>Email：{email}</li>
@@ -139,7 +143,7 @@ with st.form("book_form", clear_on_submit=False):
                     """
                     admin_text = (
                         "收到新的預約申請：\n"
-                        f"- 時間（UTC）：{ts}\n- 姓名：{name}\n- 手機：{phone}\n- Email：{email}\n\n"
+                        f"- 時間（台北）：{ts_local}\n- 姓名：{name}\n- 手機：{phone}\n- Email：{email}\n\n"
                         "需求內容：\n"
                         f"{request.strip()}\n"
                     )
@@ -155,7 +159,7 @@ with st.form("book_form", clear_on_submit=False):
                 # 4) 切到成功畫面（隱藏表單）
                 st.session_state.booking_submitted = True
                 st.session_state.booking_payload = {
-                    "ts": ts, "name": name, "phone": phone, "email": email
+                    "ts_local": ts_local, "name": name, "phone": phone, "email": email
                 }
                 st.rerun()
 
