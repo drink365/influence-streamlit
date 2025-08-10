@@ -17,10 +17,10 @@ st.subheader("立即行動")
 a, b = st.columns(2)
 with a:
     if st.button("開始規劃（免費）", use_container_width=True):
-        st.switch_page("pages/2_🧭_Diagnostic.py")
+        st.switch_page("pages/2_Diagnostic.py")
 with b:
     if st.button("預約 30 分鐘諮詢", use_container_width=True):
-        st.switch_page("pages/5_📅_Booking.py")
+        st.switch_page("pages/5_Booking.py")
 
 st.caption("免責：本平台提供之計算與建議僅供初步規劃參考，請依專業顧問複核與相關法令為準。")
 footer()
