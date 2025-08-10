@@ -8,29 +8,22 @@ from src.config import SMTP
 
 st.title("預約 30 分鐘線上會談")
 
-# ---- 可選：嵌入排程工具（設定任一就顯示） ----
-calendly_url = None
-gcal_iframe = None
-try:
-    calendly_url = st.secrets.get("CALENDLY_URL")
-    gcal_iframe = st.secrets.get("GCAL_IFRAME_SRC")
-except Exception:
-    pass
+# --- 固定嵌入：Google 日曆（以公司帳號 123@gracefo.com）---
+GCAL_IFRAME_SRC = "https://calendar.google.com/calendar/embed?src=123%40gracefo.com&ctz=Asia%2FTaipei"
+st.caption("您可以直接在下方日曆中選擇適合的時段（Google 日曆）")
+st.components.v1.iframe(
+    src=GCAL_IFRAME_SRC,
+    width=800,
+    height=600,
+    scrolling=False
+)
 
-def render_calendar():
-    if calendly_url:
-        st.caption("您也可直接在下方日曆中選擇時段（Calendly）")
-        st.components.v1.iframe(src=f"{calendly_url}", height=800, scrolling=True)
-        return True
-    if gcal_iframe:
-        st.caption("您也可直接在下方日曆中選擇時段（Google 日曆）")
-        st.components.v1.iframe(src=gcal_iframe, height=800, scrolling=True)
-        return True
-    return False
+st.divider()
+st.subheader("或留下您的聯絡方式，我們會回覆您：")
 
 repo = BookingRepo()
 
-# ---- 狀態：成功後顯示成功畫面（避免重送） ----
+# ---- 成功畫面狀態 ----
 if "booking_success" not in st.session_state:
     st.session_state.booking_success = False
 if "booking_payload" not in st.session_state:
@@ -45,20 +38,11 @@ def show_success_view():
         )
         if payload.get("ts"):
             st.caption(f"提交時間（UTC）：{payload['ts']}")
-
     st.divider()
-    embedded = render_calendar()
-    if not embedded:
-        st.info("（正式版可嵌入 Calendly / Google 日曆 iframe。請在 Secrets 設定 CALENDLY_URL 或 GCAL_IFRAME_SRC 以啟用。）")
-
-    st.divider()
-    c1, c2 = st.columns(2)
+    c1, _ = st.columns(2)
     with c1:
         if st.button("回首頁", use_container_width=True):
             st.switch_page("app.py")
-    with c2:
-        st.write("")  # 保留第二個 CTA 位子（例如 FAQ / 準備清單）
-        # 你之後可把這裡改成：st.switch_page("pages/FAQ.py")
 
 if st.session_state.booking_success:
     show_success_view()
@@ -66,7 +50,6 @@ if st.session_state.booking_success:
     st.stop()
 
 # ---- 表單（提交即處理；成功後切換到成功畫面）----
-st.subheader("留下您的聯絡方式，我們會回覆您：")
 with st.form("book_form", clear_on_submit=False):
     name = st.text_input("姓名 *")
     phone = st.text_input("手機 *")
@@ -115,11 +98,11 @@ with st.form("book_form", clear_on_submit=False):
                 f"- 時間（UTC）：{ts}\n- 手機：{phone}\n- Email：{email}\n\n"
                 "若您有補充資訊，歡迎直接回覆此信。\n— 永傳家族辦公室"
             )
-            ok_user, msg_user = (False, "SMTP not configured")
+            ok_user, _ = (False, None)
             try:
-                ok_user, msg_user = send_email(email.strip(), user_subject, user_html, user_text)
-            except Exception as e:
-                msg_user = str(e)
+                ok_user, _ = send_email(email.strip(), user_subject, user_html, user_text)
+            except Exception:
+                pass  # 寄信失敗不阻斷
 
             admin_to = SMTP.get("to_admin")
             if admin_to:
@@ -143,15 +126,9 @@ with st.form("book_form", clear_on_submit=False):
                 except Exception:
                     pass  # 管理者信失敗不阻斷
 
-            # 4) 切換到成功畫面（避免重送）
+            # 4) 切換成功畫面
             st.session_state.booking_success = True
             st.session_state.booking_payload = {"ts": ts, "name": name, "phone": phone, "email": email}
-            # 清空表單（避免返回後又自動帶入）
-            st.experimental_rerun()  # 這裡在表單 submit 後可安全使用
-
-# 若需要：在表單上方也能先顯示內嵌日曆
-st.divider()
-if not (calendly_url or gcal_iframe):
-    st.info("（你也可以在 Secrets 設定 CALENDLY_URL 或 GCAL_IFRAME_SRC 來啟用內嵌日曆）")
+            st.experimental_rerun()
 
 footer()
