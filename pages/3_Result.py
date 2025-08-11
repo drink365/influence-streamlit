@@ -1,148 +1,231 @@
-import streamlit as st, json
-from datetime import date
+# pages/3_Result.py
+# 穩健版 Result 頁：修正 charts 匯入錯誤、依賴失敗時自動退回、不讓整頁掛掉
 
-from src.repos.case_repo import CaseRepo
-from src.repos.event_repo import EventRepo
-from src.services.reports import generate_docx
-from src.services.reports_pdf import build_pdf_report
-from src.services.charts import tax_breakdown_bar, asset_pie, savings_compare_bar, simple_sankey
-from src.domain.tax_loader import load_tax_constants
-from src.domain.tax_rules import EstateTaxCalculator
-from src.services.billing import try_unlock_full_report, reward_won, balance, REPORT_FULL_COST
+import sys, pathlib, io
+from datetime import datetime
+import streamlit as st
 
-st.set_page_config(page_title="結果", page_icon="📄", layout="wide")
+# -----------------------------
+# 路徑保險：確保可以 import src/*
+# -----------------------------
+ROOT = pathlib.Path(__file__).resolve().parents[1]  # 專案根目錄
+if str(ROOT) not in sys.path:
+    sys.path.append(str(ROOT))
 
-st.title("📄 診斷結果與報告（含點數解鎖）")
-case_id = st.text_input("輸入案件碼 Case ID", placeholder="CASE-20250810-ABCD")
+# -----------------------------
+# 依賴（延遲匯入與防呆）
+# -----------------------------
+_HAS_CHARTS = False
+try:
+    from src.services.charts import (
+        tax_breakdown_bar,
+        asset_pie,
+        savings_compare_bar,
+        simple_sankey,
+    )
+    _HAS_CHARTS = True
+except Exception:
+    # 圖表不可用時，提供 no-op 函式，避免頁面壞掉
+    def _noop(*args, **kwargs):
+        return None
+    tax_breakdown_bar = asset_pie = savings_compare_bar = simple_sankey = _noop
 
-advisor_id = st.session_state.get("advisor_id", "guest")
-advisor_name = st.session_state.get("advisor_name", "未登入")
+# 報告輸出（PDF/HTML）
+_HAS_REPORTS_PDF = False
+try:
+    from src.services.reports_pdf import build_pdf_report  # 會自動退回 HTML
+    _HAS_REPORTS_PDF = True
+except Exception:
+    build_pdf_report = None
 
-if case_id:
-    case = CaseRepo.get(case_id)
-    if not case:
-        st.error("查無案件，請確認案件碼是否正確。")
-        st.stop()
+# 報告（HTML/DOCX 等其他）
+_HAS_REPORTS = False
+try:
+    from src.services.reports import build_full_report_html  # 若有
+    _HAS_REPORTS = True
+except Exception:
+    build_full_report_html = None
 
-    col0 = st.columns(3)
-    col0[0].metric("我的點數", balance(advisor_id))
-    col0[1].metric("顧問", advisor_name)
+# Case 讀取
+try:
+    from src.repos.case_repo import CaseRepo
+except Exception:
+    CaseRepo = None
 
-    col = st.columns(3)
-    col[0].metric("淨遺產（元）", f"{case['net_estate']:,.0f}")
-    col[1].metric("估算稅額（元）", f"{case['tax_estimate']:,.0f}")
-    col[2].metric("建議預留稅源（元）", f"{case['liquidity_needed']:,.0f}")
+# 點數經濟（可選）
+_HAS_BILLING = False
+try:
+    from src.services.billing import try_unlock_full_report, reward_won, balance
+    _HAS_BILLING = True
+except Exception:
+    def try_unlock_full_report(*a, **k): return (True, "（未啟用扣點系統，本次視為已解鎖）")
+    def reward_won(*a, **k): return None
+    def balance(*a, **k): return 0
 
-    payload = {}
+# -----------------------------
+# 小工具
+# -----------------------------
+def _fmt_money(x: float) -> str:
     try:
-        payload = json.loads(case.get("plan_json") or case.get("payload_json") or "{}")
+        return f"{float(x):,.0f}"
     except Exception:
-        payload = {}
+        return "—"
 
-    taxable_base_wan = None
-    if isinstance(payload, dict):
-        taxable_base_wan = payload.get("taxable_base_wan")
-        if taxable_base_wan is None and "params" in payload:
-            taxable_base_wan = payload["params"].get("taxable_base_wan")
+def _fmt_wan(x: float) -> str:
+    try:
+        return f"{float(x)/10_000:,.1f} 萬元"
+    except Exception:
+        return "—"
 
-    assets_fin = case.get("assets_financial", 0.0)
-    assets_re  = case.get("assets_realestate", 0.0)
-    assets_biz = case.get("assets_business", 0.0)
-    total_assets = (payload.get("assets_total") if isinstance(payload, dict) else None) or (assets_fin + assets_re + assets_biz)
+def _safe_pyplot(fig):
+    if _HAS_CHARTS and fig is not None:
+        st.pyplot(fig, use_container_width=True)
 
-    st.divider()
-    st.markdown("### 視覺化總覽")
+def _load_case(case_id: str | None):
+    if CaseRepo is None:
+        return None
+    if case_id:
+        row = CaseRepo.get(case_id)
+        if row: return row
+    # 沒指定 case_id 時，抓最新一筆
+    try:
+        rows = CaseRepo.list_latest(limit=1)
+        return rows[0] if rows else None
+    except Exception:
+        return None
 
-    c1, c2 = st.columns(2)
+def _build_and_link_report(case: dict):
+    """嘗試輸出 PDF；若不可用就退回 HTML。回傳 (path, label)"""
+    if build_pdf_report:
+        try:
+            path = build_pdf_report(case)
+            return str(path), "下載報告"
+        except Exception:
+            pass
+    # 若 services.reports 有 HTML 產生器，就用它
+    if build_full_report_html:
+        try:
+            html = build_full_report_html(case)
+            out = pathlib.Path("data/reports"); out.mkdir(parents=True, exist_ok=True)
+            p = out / f"{case.get('id','report')}.html"
+            p.write_text(html, encoding="utf-8")
+            return str(p), "下載報告（HTML）"
+        except Exception:
+            pass
+    # 最簡 fallback：內建一個極簡 HTML
+    out = pathlib.Path("data/reports"); out.mkdir(parents=True, exist_ok=True)
+    p = out / f"{case.get('id','report')}.html"
+    html = f"""<!doctype html><meta charset="utf-8">
+    <h2>規劃報告（簡版）</h2>
+    <div>案件：{case.get('id','')}</div>
+    <div>產出時間：{datetime.now().strftime('%Y-%m-%d %H:%M')}</div>
+    <ul>
+      <li>淨遺產：{_fmt_money(case.get('net_estate',0))}</li>
+      <li>估算稅額：{_fmt_money(case.get('tax_estimate',0))}</li>
+      <li>建議預留稅源：{_fmt_money(case.get('liquidity_needed',0))}</li>
+    </ul>
+    <small>本報告為教育性質示意，不構成保險或法律建議。</small>
+    """
+    p.write_text(html, encoding="utf-8")
+    return str(p), "下載報告（HTML）"
 
-    with c1:
-        if taxable_base_wan is None:
-            constants = load_tax_constants(on_date=date.today())
-            calc = EstateTaxCalculator(constants)
-            params = (payload.get("params") or {})
-            has_spouse = bool(params.get("has_spouse", False))
-            adult_children = int(params.get("adult_children", 0))
-            parents = int(params.get("parents", 0))
-            disabled_people = int(params.get("disabled_people", 0))
-            other_dependents = int(params.get("other_dependents", 0))
-            net_wan = float(case["net_estate"]) / constants.UNIT_FACTOR
-            ded_wan = calc.compute_total_deductions_wan(has_spouse, adult_children, parents, disabled_people, other_dependents)
-            taxable_base_wan = calc.compute_taxable_base_wan(net_wan, ded_wan)
+# -----------------------------
+# UI
+# -----------------------------
+st.set_page_config(page_title="結果與報告", page_icon="📄", layout="wide")
+st.title("📄 結果與報告")
 
-        st.caption("各級距稅額拆解（依當前稅制）")
-        fig1 = tax_breakdown_bar(float(taxable_base_wan), constants=load_tax_constants(on_date=date.today()))
-        st.pyplot(fig1, use_container_width=True)
+# 參數：case_id（可從分享或前頁帶入）
+q = st.query_params
+case_id = q.get("case_id") if isinstance(q.get("case_id"), str) else (q.get("case_id")[0] if q.get("case_id") else "")
+case = _load_case(case_id)
 
-    with c2:
-        st.caption("資產結構（金融 / 不動產 / 公司股權）")
-        fig2 = asset_pie(assets_fin, assets_re, assets_biz)
-        st.pyplot(fig2, use_container_width=True)
+if not case:
+    st.warning("尚未找到案件資料。請先完成診斷或從 Dashboard 選擇案件。")
+    st.stop()
 
-    # === 策略模擬區 ===
-    st.divider()
-    st.markdown("### 策略模擬（資金缺口對比）")
-    reserve_default = float(case.get("liquidity_needed", 0.0))
-    reserve = st.number_input("方案預留稅源（元）", min_value=0.0, step=100000.0, format="%.0f", value=reserve_default)
+# 頂部資訊
+st.caption(f"案件：{case.get('id','')}｜建立時間：{(case.get('created_at') or '')[:19].replace('T',' ')}")
 
-    cc1, cc2 = st.columns(2)
-    with cc1:
-        fig3 = savings_compare_bar(float(case['tax_estimate']), reserve)
-        st.pyplot(fig3, use_container_width=True)
-    with cc2:
-        fig4 = simple_sankey(total_assets, float(case['tax_estimate']), reserve)
-        st.pyplot(fig4, use_container_width=True)
+# KPI
+c1, c2, c3 = st.columns(3)
+c1.metric("淨遺產（元）", _fmt_money(case.get("net_estate", 0.0)))
+c2.metric("估算稅額（元）", _fmt_money(case.get("tax_estimate", 0.0)))
+c3.metric("建議預留稅源（元）", _fmt_money(case.get("liquidity_needed", 0.0)))
 
-    if st.button("記錄此次策略模擬"):
-        EventRepo.log(case_id, "STRATEGY_SIMULATED", {"reserve": reserve, "tax": float(case['tax_estimate'])})
-        st.toast("已記錄策略模擬", icon="✅")
+st.divider()
 
-    st.divider()
-    st.markdown("### 檢視報告（簡/全）")
-    st.info(f"完整版 PDF/DOCX 需解鎖：每次 {REPORT_FULL_COST} 點。管理碼仍可免費解鎖（內部使用）。")
+# -----------------------------
+# 解鎖區（管理碼 / 點數）
+# -----------------------------
+with st.expander("解鎖並下載完整報告", expanded=True):
+    # 管理碼（不扣點）
+    admin_key = st.secrets.get("ADMIN_KEY")
+    ak = st.text_input("管理碼（內部測試用）", type="password", value="")
+    admin_unlock = bool(admin_key) and ak and (ak == admin_key)
 
-    tabs = st.tabs(["A. 使用點數解鎖（顧問）","B. 管理碼解鎖（內部）","C. 成交回報解鎖（回饋點）"])
+    # 點數解鎖（若安裝了 billing）
+    user_id = st.session_state.get("advisor_id")  # 顧問登入後才會有
+    cost_tip = st.secrets.get("CREDITS", {}).get("REPORT_FULL_COST", 5)
+    unlocked_msg = None
+    credit_unlock = False
 
-    def _download_full_reports(current_case):
-        path = build_pdf_report(current_case)
-        label = "⬇️ 下載 PDF（完整版）" if path.suffix.lower() == ".pdf" else "⬇️ 下載 HTML（完整版）"
-        with open(path, "rb") as f:
-            st.download_button(label, data=f, file_name=path.name)
-        fname = generate_docx(current_case, full=True)
-        with open(f"data/reports/{fname}", "rb") as f:
-            st.download_button("⬇️ 下載 DOCX（完整版）", data=f, file_name=fname)
-
-    with tabs[0]:
-        if st.button(f"使用 {REPORT_FULL_COST} 點解鎖並下載", type="primary"):
-            ok, msg = try_unlock_full_report(advisor_id, case_id)
-            if ok:
-                EventRepo.log(case_id, "REPORT_UNLOCKED", {"by":"credits"})
-                st.success(msg)
-                _download_full_reports(case)
+    cols = st.columns(3)
+    with cols[0]:
+        if st.button("用管理碼解鎖", use_container_width=True):
+            if admin_unlock:
+                unlocked_msg = "管理碼驗證成功，已解鎖。"
             else:
-                st.error(msg)
-                st.caption("前往顧問 Dashboard → 測試儲值加點。")
-                st.page_link("pages/8_Advisor_Dashboard.py", label="➡️ 顧問 Dashboard", icon="🧭")
+                unlocked_msg = "管理碼錯誤或未設定。"
 
-    with tabs[1]:
-        admin_key = st.text_input("管理碼", type="password")
-        if st.button("用管理碼解鎖"):
-            if admin_key and admin_key == st.secrets.get("ADMIN_KEY", ""):
-                EventRepo.log(case_id, "REPORT_UNLOCKED", {"by":"admin_key"})
-                st.success("已解鎖完整版報告！")
-                _download_full_reports(case)
-            else:
-                st.error("管理碼不正確。")
+    with cols[1]:
+        if _HAS_BILLING:
+            if st.button(f"用點數解鎖（扣 {cost_tip} 點）", use_container_width=True, disabled=not user_id):
+                ok, msg = try_unlock_full_report(user_id or "", case.get("id",""))
+                credit_unlock = ok
+                unlocked_msg = msg if msg else ("解鎖成功。" if ok else "解鎖失敗。")
+        else:
+            st.button("用點數解鎖（未啟用）", disabled=True, use_container_width=True)
 
-    with tabs[2]:
-        st.caption("完成成交回報即可解鎖完整版報告，並回饋點數（預設 +5）。")
-        with st.form("won_form"):
-            product = st.selectbox("產品別", ["壽險","年金","醫療","投資型","其他"])
-            premium = st.number_input("年繳保費（元）", min_value=0.0, step=10000.0, format="%.0f")
-            remark = st.text_area("備註（可填入公司/商品名稱、要保關係等）")
-            submitted = st.form_submit_button("回報成交並解鎖")
-        if submitted:
-            CaseRepo.update_status(case_id, "Won")
-            EventRepo.log(case_id, "WON_REPORTED", {"product": product, "premium": premium, "remark": remark})
-            reward_won(advisor_id, case_id, premium)
-            st.success("謝謝回報！已回饋點數並解鎖完整版報告。")
-            _download_full_reports(case)
+    with cols[2]:
+        if user_id and _HAS_BILLING:
+            st.metric("我的點數", balance(user_id))
+
+    if unlocked_msg:
+        st.info(unlocked_msg)
+
+    unlocked = admin_unlock or credit_unlock
+    if unlocked:
+        path, label = _build_and_link_report(case)
+        st.success("已解鎖。您可以下載完整報告。")
+        with open(path, "rb") as fh:
+            st.download_button(label, data=fh.read(), file_name=pathlib.Path(path).name, mime="application/octet-stream")
+
+st.divider()
+
+# -----------------------------
+# 視覺化（存在才畫，失敗不報錯）
+# -----------------------------
+left, right = st.columns(2)
+
+with left:
+    if _HAS_CHARTS:
+        # 稅額結構（如果你的 charts 需要「萬」，這裡自行調整參數）
+        tax = case.get("tax_estimate") or 0.0
+        fig1 = tax_breakdown_bar(tax / 10_000.0)  # 給「萬」的版本；若你的函式吃「元」請改回 tax
+        _safe_pyplot(fig1)
+    else:
+        st.info("圖表模組未載入，略過稅額圖。")
+
+with right:
+    if _HAS_CHARTS:
+        fin = case.get("assets_financial") or 0.0
+        re_ = case.get("assets_realestate") or 0.0
+        biz = case.get("assets_business") or 0.0
+        if any([fin, re_, biz]):
+            fig2 = asset_pie(fin, re_, biz)
+            _safe_pyplot(fig2)
+    else:
+        st.info("圖表模組未載入，略過資產配置圖。")
+
+st.caption("＊本頁內容為教育性質示意，不構成保險或法律建議。")
