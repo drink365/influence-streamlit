@@ -1,6 +1,6 @@
 from __future__ import annotations
 from typing import Optional, List, Dict
-from datetime import datetime, timedelta
+from datetime import datetime
 import secrets
 
 from src.db import get_conn
@@ -12,6 +12,7 @@ class ShareRepo:
     def create(case_id: str, advisor_id: str, *, days_valid: int = 14) -> Dict:
         conn = get_conn()
         now = datetime.utcnow()
+        from datetime import timedelta
         token = secrets.token_urlsafe(16)
         exp = now + timedelta(days=days_valid)
         conn.execute(
@@ -33,8 +34,7 @@ class ShareRepo:
     @staticmethod
     def get_by_token(token: str) -> Optional[Dict]:
         cur = get_conn().execute(f"SELECT * FROM {ShareRepo.TBL} WHERE token=?", (token,))
-        row = cur.fetchone()
-        return dict(row) if row else None
+        row = cur.fetchone(); return dict(row) if row else None
 
     @staticmethod
     def list_by_advisor(advisor_id: str) -> List[Dict]:
@@ -45,15 +45,17 @@ class ShareRepo:
         return [dict(r) for r in cur.fetchall()]
 
     @staticmethod
-    def mark_opened(token: str):
-        get_conn().execute(
-            f"UPDATE {ShareRepo.TBL} SET opened_at=? WHERE token=? AND opened_at IS NULL",
-            (datetime.utcnow().isoformat(), token)
-        ).connection.commit()
+    def delete_by_token(token: str) -> bool:
+        conn = get_conn()
+        cur = conn.execute(f"DELETE FROM {ShareRepo.TBL} WHERE token=?", (token,))
+        conn.commit()
+        return cur.rowcount > 0
 
     @staticmethod
-    def mark_accepted(token: str):
-        get_conn().execute(
-            f"UPDATE {ShareRepo.TBL} SET accepted_at=? WHERE token=? AND accepted_at IS NULL",
-            (datetime.utcnow().isoformat(), token)
-        ).connection.commit()
+    def is_expired(row: Dict) -> bool:
+        try:
+            exp = row.get("expires_at")
+            if not exp: return False
+            return datetime.utcnow() > datetime.fromisoformat(exp)
+        except Exception:
+            return False
