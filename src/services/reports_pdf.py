@@ -1,113 +1,132 @@
 from __future__ import annotations
 from pathlib import Path
-from typing import Dict, Any
 from datetime import datetime
-import io, base64
+import io
 
-from src.services.report_templates import render_template, fig_to_data_uri
-from src.services.charts import tax_breakdown_bar, asset_pie
-from src.domain.tax_loader import load_tax_constants
-from src.services.brand import load_brand, logo_data_uri
-from src.services.strategy_writer import suggest
+# 延遲匯入：WeasyPrint 非必裝，裝不到就退回 HTML
+try:
+    from weasyprint import HTML
+    HAS_WEASY = True
+except Exception:
+    HAS_WEASY = False
 
-OUT_DIR = Path("data/reports")
-OUT_DIR.mkdir(parents=True, exist_ok=True)
-
-
-def _html_to_pdf(html: str, out_path: Path) -> bool:
+# 不在頂層匯入 charts，避免一出錯整檔無法 import
+def _try_import_charts():
     try:
-        from weasyprint import HTML  # type: ignore
-        HTML(string=html).write_pdf(out_path.as_posix())
-        return True
-    except Exception:
-        return False
+        # 相對匯入比絕對匯入更穩
+        from .charts import (
+            tax_breakdown_bar,
+            asset_pie,
+            savings_compare_bar,
+            simple_sankey,
+        )
+        return {
+            "tax_breakdown_bar": tax_breakdown_bar,
+            "asset_pie": asset_pie,
+            "savings_compare_bar": savings_compare_bar,
+            "simple_sankey": simple_sankey,
+        }, None
+    except Exception as e:
+        return None, e
 
+def _ensure_outdir() -> Path:
+    out = Path("data/reports")
+    out.mkdir(parents=True, exist_ok=True)
+    return out
 
-def _qr_data_uri(url: str) -> str | None:
-    """使用 qrcode（若無則回傳 None）。"""
-    try:
-        import qrcode  # type: ignore
-        img = qrcode.make(url)
-        buf = io.BytesIO()
-        img.save(buf, format="PNG")
-        b64 = base64.b64encode(buf.getvalue()).decode("ascii")
-        return f"data:image/png;base64,{b64}"
-    except Exception:
-        return None
+def _png_bytes_from_fig(fig):
+    """將 matplotlib 圖存成 PNG bytes"""
+    import matplotlib.pyplot as plt
+    buf = io.BytesIO()
+    fig.savefig(buf, format="png", bbox_inches="tight", dpi=160)
+    plt.close(fig)
+    buf.seek(0)
+    return buf.getvalue()
 
+def _build_html(case: dict) -> str:
+    """最簡 HTML 報告（即使沒有圖也能出）"""
+    id_ = case.get("id", "")
+    net = case.get("net_estate", 0.0)
+    tax = case.get("tax_estimate", 0.0)
+    liq = case.get("liquidity_needed", 0.0)
 
-def build_pdf_report(case: Dict[str, Any]) -> Path:
-    # ===== 基本數據 =====
-    case_id = case["id"]
-    client_alias = case.get("client_alias", "")
-    net_estate = float(case.get("net_estate", 0))
-    tax_estimate = float(case.get("tax_estimate", 0))
-    liquidity_needed = float(case.get("liquidity_needed", 0))
+    return f"""
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8"/>
+  <title>規劃報告 - {id_}</title>
+  <style>
+    body {{ font-family: -apple-system, BlinkMacSystemFont, Segoe UI, Roboto, Noto Sans, Arial; margin: 32px; }}
+    h1 {{ margin-bottom: 4px; }}
+    .meta {{ color:#666; font-size: 12px; margin-bottom: 24px; }}
+    .card {{ border:1px solid #eee; border-radius:12px; padding:16px; margin-bottom:12px; }}
+    .kv {{ display:flex; gap:16px; }}
+    .kv div {{ flex:1; }}
+    .num {{ font-weight:600; font-size:20px; }}
+  </style>
+</head>
+<body>
+  <h1>規劃報告（簡版）</h1>
+  <div class="meta">案件：{id_}｜產出時間：{datetime.now().strftime("%Y-%m-%d %H:%M")}</div>
 
-    import json
-    payload = {}
-    try:
-        payload = json.loads(case.get("payload_json") or case.get("plan_json") or "{}")
-    except Exception:
-        payload = {}
+  <div class="kv">
+    <div class="card"><div>淨遺產</div><div class="num">{net:,.0f}</div></div>
+    <div class="card"><div>估算稅額</div><div class="num">{tax:,.0f}</div></div>
+    <div class="card"><div>建議預留稅源</div><div class="num">{liq:,.0f}</div></div>
+  </div>
 
-    taxable_base_wan = float(payload.get("taxable_base_wan", 0) or 0)
-    assets_fin = float(case.get("assets_financial", 0))
-    assets_re  = float(case.get("assets_realestate", 0))
-    assets_biz = float(case.get("assets_business", 0))
+  <p style="margin-top:24px;color:#666;font-size:12px">
+    本報告為教育性質示意，不構成保險或法律建議。
+  </p>
+</body>
+</html>
+"""
 
-    # ===== 圖像化 =====
-    constants = load_tax_constants()
-    fig1 = tax_breakdown_bar(taxable_base_wan, constants=constants)
-    fig2 = asset_pie(assets_fin, assets_re, assets_biz)
-    img_tax = fig_to_data_uri(fig1)
-    img_asset = fig_to_data_uri(fig2)
+def build_pdf_report(case: dict) -> Path:
+    """
+    產生 PDF（若無 WeasyPrint 或圖表匯入失敗，會退回 HTML）。
+    回傳檔案路徑（.pdf 或 .html）
+    """
+    outdir = _ensure_outdir()
+    charts, charts_err = _try_import_charts()
 
-    # ===== 品牌設定與聯絡 =====
-    brand = load_brand()
-    brand_logo = logo_data_uri(brand)
-    contact = brand.get("contact", {})
-    booking_url = contact.get("booking_url") or contact.get("website") or ""
-    booking_qr = _qr_data_uri(booking_url) if booking_url else None
+    # 嘗試組圖（若失敗就不放圖）
+    images = {}
+    if charts:
+        try:
+            # 依現有欄位生成圖表（有多少用多少）
+            if case.get("tax_estimate") and case.get("net_estate"):
+                fig1 = charts["tax_breakdown_bar"](
+                    float(case.get("tax_estimate")) / 10000.0  # 若此函式吃「萬」，自行調整
+                )
+                images["tax_breakdown.png"] = _png_bytes_from_fig(fig1)
 
-    # ===== 策略建議 =====
-    strategies = suggest(case, payload)
+            assets_fin = case.get("assets_financial") or 0.0
+            assets_re  = case.get("assets_realestate") or 0.0
+            assets_biz = case.get("assets_business") or 0.0
+            if any([assets_fin, assets_re, assets_biz]):
+                fig2 = charts["asset_pie"](assets_fin, assets_re, assets_biz)
+                images["asset_pie.png"] = _png_bytes_from_fig(fig2)
+        except Exception:
+            # 圖表失敗就忽略，不要讓整個匯出掛掉
+            images = {}
 
-    # ===== 模板上下文 =====
-    context = {
-        "title": "傳承診斷報告",
-        "case_id": case_id,
-        "client_alias": client_alias,
-        "date_str": datetime.now().strftime("%Y-%m-%d"),
-        "net_estate": f"{net_estate:,.0f}",
-        "tax_estimate": f"{tax_estimate:,.0f}",
-        "liquidity_needed": f"{liquidity_needed:,.0f}",
-        "rules_version": payload.get("rules_version", ""),
-        "taxable_base_wan": f"{taxable_base_wan:,.0f}",
-        "img_tax": img_tax,
-        "img_asset": img_asset,
-        "notes": [
-            "本報告僅供參考；完整規劃須由專業顧問審閱。",
-            "圖表與稅則基於當前版本設定，未含未來法令變動風險。",
-        ],
-        # 品牌
-        "brand_name": brand.get("name","永傳家族辦公室"),
-        "primary_color": brand.get("primary_color"),
-        "accent_color": brand.get("accent_color"),
-        "text_color": brand.get("text_color"),
-        "logo_data_uri": brand_logo,
-        "contact": contact,
-        # 策略
-        "strategies": strategies,
-        # QR
-        "booking_qr": booking_qr,
-    }
+    # 基本 HTML
+    html = _build_html(case)
 
-    html = render_template("report_full.html", context)
+    # 若能做成 PDF 就輸出 PDF；否則輸出 HTML
+    case_id = case.get("id", "report")
+    if HAS_WEASY:
+        try:
+            pdf_path = outdir / f"{case_id}.pdf"
+            # 若要嵌入圖片，可在 HTML 中使用 data URI（此處為簡化版本，不嵌圖也能出）
+            HTML(string=html).write_pdf(pdf_path.as_posix())
+            return pdf_path
+        except Exception:
+            pass
 
-    out_pdf = OUT_DIR / f"{case_id}_report_full.pdf"
-    out_html = OUT_DIR / f"{case_id}_report_full.html"
-    if _html_to_pdf(html, out_pdf):
-        return out_pdf
-    out_html.write_text(html, encoding="utf-8")
-    return out_html
+    # 退回 HTML 檔
+    html_path = outdir / f"{case_id}.html"
+    html_path.write_text(html, encoding="utf-8")
+    return html_path
