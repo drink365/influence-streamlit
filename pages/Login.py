@@ -13,7 +13,7 @@ import streamlit as st
 # ===================== 基本設定 =====================
 st.set_page_config(page_title="顧問登入（Email OTP）", page_icon="🔒", layout="centered")
 st.title("🔐 顧問登入（Email OTP）")
-st.caption("輸入公司白名單 Email。我們會寄送 6 位數驗證碼。若未設定 SMTP，會顯示測試用驗證碼。")
+st.caption("輸入公司白名單 Email。我們會寄送 6 位數驗證碼。")
 
 # 目標頁可在 secrets 設定：POST_LOGIN_PAGE="pages/2_Diagnostic.py"
 TARGET_PAGE = st.secrets.get("POST_LOGIN_PAGE", "pages/2_Diagnostic.py")
