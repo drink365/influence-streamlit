@@ -1,63 +1,72 @@
+# pages/2_Diagnostic.py
 import streamlit as st
-from utils import calculate_estate_tax, calculate_gift_tax
+from datetime import date
 
-st.set_page_config(page_title="傳承策略診斷", page_icon="💡", layout="wide")
+# 直接用你既有的「精準稅則」模組
+from src.domain.tax_loader import load_tax_constants
+from src.domain.tax_rules import EstateTaxCalculator
 
-st.title("📊 傳承策略診斷（以「萬元」為單位）")
-st.write("請輸入資產與負債（單位：萬元），系統將估算可能的遺產稅與現金壓力。")
+st.set_page_config(page_title="遺產稅診斷", page_icon="💡", layout="wide")
 
-# 小工具：格式化為「萬元」
+st.title("📊 遺產稅診斷（輸入/顯示皆為「萬元」）")
+st.caption("本頁僅專注遺產稅估算；免稅額、常用扣除額與喪葬費依你既有稅則自動套用。")
+
 def fmt_wan(x: float) -> str:
-    return f"{x:,.1f} 萬元"
+    return f"{float(x):,.1f} 萬元"
 
-# === 輸入區（全部以「萬元」為單位） ===
-with st.form("diagnostic_form"):
-    col1, col2 = st.columns(2)
-    with col1:
-        total_assets_wan = st.number_input("總資產（萬元）", min_value=0.0, step=10.0, value=10000.0, format="%.1f")
-        debt_wan = st.number_input("負債（萬元）", min_value=0.0, step=10.0, value=0.0, format="%.1f")
-    with col2:
-        spouse_count = st.number_input("配偶人數（0或1）", min_value=0, max_value=1, step=1, value=1)
-        dependent_count = st.number_input("受扶養親屬人數（人）", min_value=0, step=1, value=2)
+# === 參數（稅則版本日期，可改今天）===
+with st.expander("進階設定", expanded=False):
+    rules_date = st.date_input("稅則適用日期", value=date.today(), format="YYYY-MM-DD")
+    st.caption("若未來稅則更新，改此日期即可套用對應版本。")
 
-    # 可選：本年贈與金額（萬元）
-    gift_amount_wan = st.number_input("（可選）本年預計贈與金額（萬元）", min_value=0.0, step=10.0, value=0.0, format="%.1f")
+# === 輸入（全部以「萬元」）===
+with st.form("estate_form"):
+    c1, c2 = st.columns(2)
+    with c1:
+        net_estate_wan = st.number_input("淨遺產（萬元）", min_value=0.0, step=10.0, value=10_000.0, format="%.1f",
+                                          help="已扣除負債後之淨額；本頁僅做遺產稅估算，不再細拆資產/負債明細。")
+        has_spouse = st.checkbox("有配偶", value=True)
+        parents = st.number_input("直系尊親屬（父母/祖父母）人數", min_value=0, step=1, value=0)
+    with c2:
+        adult_children = st.number_input("成年子女人數", min_value=0, step=1, value=2)
+        disabled_people = st.number_input("身心障礙受扶養人數", min_value=0, step=1, value=0)
+        other_dependents = st.number_input("其他受扶養親屬人數", min_value=0, step=1, value=0)
 
-    submitted = st.form_submit_button("開始診斷")
+    submitted = st.form_submit_button("開始計算")
 
-# === 計算與顯示（內部換算成「元」計算，顯示回到「萬元」） ===
+# === 計算（內部以「萬」單位對應你的稅則模組；不做元↔萬來回換算，避免誤差）===
 if submitted:
-    # 換算成元
-    total_assets = total_assets_wan * 10_000
-    debt = debt_wan * 10_000
-    net_assets = total_assets - debt
+    # 載入對應日期的稅則常數
+    constants = load_tax_constants(on_date=rules_date)
 
-    # 遺產稅（元）
-    estate_tax = calculate_estate_tax(
-        taxable_base=net_assets,
-        spouse_count=spouse_count,
-        dependent_count=dependent_count
+    # 初始化你的計算器（你現有程式已實作）
+    calc = EstateTaxCalculator(constants)
+
+    # 家庭結構參數（沿用你現有方法簽名）
+    ded_wan = calc.compute_total_deductions_wan(
+        has_spouse=bool(has_spouse),
+        adult_children=int(adult_children),
+        parents=int(parents),
+        disabled_people=int(disabled_people),
+        other_dependents=int(other_dependents),
     )
-    estate_tax_wan = estate_tax / 10_000
+    # 課稅基礎（萬）
+    taxable_base_wan = calc.compute_taxable_base_wan(
+        net_estate_wan=float(net_estate_wan),
+        total_deductions_wan=float(ded_wan),
+    )
+    # 遺產稅（萬）
+    tax_wan = calc.compute_tax_wan(float(taxable_base_wan))
 
-    # 顯示（萬元）
-    st.subheader("診斷結果（萬元）")
-    c1, c2, c3, c4 = st.columns(4)
-    c1.metric("總資產", fmt_wan(total_assets_wan))
-    c2.metric("負債", fmt_wan(debt_wan))
-    c3.metric("淨資產", fmt_wan(total_assets_wan - debt_wan))
-    c4.metric("估算遺產稅", fmt_wan(estate_tax_wan))
+    # === 顯示（萬元，保留 1 位小數）===
+    st.subheader("計算結果（單位：萬元）")
+    m1, m2, m3 = st.columns(3)
+    m1.metric("淨遺產", fmt_wan(net_estate_wan))
+    m2.metric("合計扣除額", fmt_wan(ded_wan))
+    m3.metric("課稅基礎", fmt_wan(taxable_base_wan))
 
-    # 贈與稅（若有輸入）
-    if gift_amount_wan and gift_amount_wan > 0:
-        gift_tax = calculate_gift_tax(gift_amount_wan * 10_000)   # 先轉元計算
-        gift_tax_wan = gift_tax / 10_000
-        st.info(f"贈與稅試算：{fmt_wan(gift_tax_wan)}（以年免稅額 244 萬與 10%/15%/20% 級距估算）")
+    st.metric("估算遺產稅額", fmt_wan(tax_wan))
 
-    # 提示
-    if estate_tax > 0:
-        st.warning("⚠️ 建議建立『稅源預留池』（例如以保單作為主要稅源預留），降低短期現金壓力與資產拋售風險。")
-    else:
-        st.success("✅ 目前估算無遺產稅負擔。仍建議備妥傳承文件（遺囑、醫療意願/代理、受益人與信託條款）。")
+    st.info("說明：扣除額已含基本扣除、配偶/受扶養親屬扣除與喪葬費等依規定可扣項；數值由你現有稅則模組自動判定。")
 
-st.caption("＊本頁計算為教育性質示意，不構成保險、法律或稅務建議；實務規劃需由專業顧問審閱。")
+st.caption("＊本頁為教育性質示意，不構成保險、法律或稅務建議；正式申報仍須以主管機關規定與完整文件為準。")
