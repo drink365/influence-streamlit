@@ -156,3 +156,9 @@ class CreditsRepo:
             (advisor_id,)
         )
         return [dict(r) for r in cur.fetchall()]
+
+CREATE INDEX IF NOT EXISTS idx_events_case ON events(case_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_shares_token ON shares(token);
+CREATE INDEX IF NOT EXISTS idx_shares_adv ON shares(advisor_id, created_at);
+CREATE INDEX IF NOT EXISTS idx_txns_adv ON credit_txns(advisor_id, created_at);
+
