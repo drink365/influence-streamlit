@@ -4,11 +4,10 @@ import pandas as pd
 from src.services.share import create_share
 from src.repos.share_repo import ShareRepo
 from src.services.auth import is_logged_in, current_role
-from src.services.billing import balance, topup
 
 st.set_page_config(page_title="顧問面板", page_icon="🧭", layout="wide")
 
-st.title("🧭 顧問 Dashboard（含點數錢包）")
+st.title("🧭 顧問 Dashboard")
 
 if not is_logged_in():
     st.warning("此頁需登入。請先到 Login 頁完成 Email OTP 登入。")
@@ -19,11 +18,8 @@ advisor_id = st.session_state.get("advisor_id")
 advisor_name = st.session_state.get("advisor_name")
 role = current_role()
 
-m1, m2 = st.columns(2)
-m1.metric("點數餘額", balance(advisor_id))
-m2.metric("身份", f"{advisor_name}｜{role}")
+st.caption(f"目前身份：{advisor_name}（{advisor_id}）｜角色：{role}")
 
-st.divider()
 with st.form("create_share"):
     st.subheader("建立分享連結")
     case_id = st.text_input("案件碼 Case ID")
@@ -41,16 +37,7 @@ if submitted:
         st.error(f"建立失敗：{e}")
 
 st.divider()
-st.subheader("點數儲值（測試用）")
-colA, colB = st.columns(2)
-with colA:
-    amt = st.number_input("加點數量", min_value=1, max_value=1000, value=20, step=1)
-with colB:
-    if st.button("加點（測試）"):
-        new_bal = topup(advisor_id, int(amt), note="TEST_TOPUP")
-        st.success(f"已加點，目前餘額：{new_bal}")
 
-st.divider()
 st.subheader("我發出的分享連結")
 rows = ShareRepo.list_by_advisor(advisor_id)
 if not rows:
@@ -66,5 +53,17 @@ else:
         "到期": (r.get("expires_at") or "")[:10],
         "已開啟": bool(r.get("opened_at")),
         "已意向": bool(r.get("accepted_at")),
+        "token": r.get("token"),
     } for r in rows])
-    st.dataframe(df, use_container_width=True)
+    st.dataframe(df.drop(columns=["token"]), use_container_width=True)
+
+    # 停用功能
+    tok = st.text_input("輸入要停用的 token（從上方連結取值）")
+    if st.button("停用該連結") and tok:
+        ok = ShareRepo.delete_by_token(tok)
+        if ok:
+            st.success("已停用（刪除）該分享連結。")
+        else:
+            st.error("找不到該 token 或已移除。")
+
+st.caption("*提示：停用會直接移除該 token；客戶再開啟將看到『無效或撤銷』訊息。*")
