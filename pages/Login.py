@@ -3,7 +3,7 @@
 # - 白名單驗證（secrets.ADVISORS）
 # - SMTP 可選；未設時顯示測試用 OTP
 # - OTP 節流與鎖定
-# - 已登入 or 登入成功後：自動跳轉到 POST_LOGIN_PAGE（預設 2_Diagnostic）
+# - 已登入 or 登入成功後：自動跳轉到 POST_LOGIN_PAGE（預設 1_Dashboard.py）
 
 import time
 import random
@@ -15,8 +15,8 @@ st.set_page_config(page_title="顧問登入（Email OTP）", page_icon="🔒", l
 st.title("🔐 顧問登入（Email OTP）")
 st.caption("輸入公司白名單 Email。我們會寄送 6 位數驗證碼。")
 
-# 目標頁可在 secrets 設定：POST_LOGIN_PAGE="pages/2_Diagnostic.py"
-TARGET_PAGE = st.secrets.get("POST_LOGIN_PAGE", "pages/2_Diagnostic.py")
+# 目標頁可在 secrets 設定：POST_LOGIN_PAGE="pages/1_Dashboard.py"
+TARGET_PAGE = st.secrets.get("POST_LOGIN_PAGE", "pages/1_Dashboard.py")
 
 # --------- 小工具 ---------
 def _now() -> float:
