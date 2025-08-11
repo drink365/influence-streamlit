@@ -9,7 +9,6 @@ st.set_page_config(page_title="分享視圖", page_icon="🔗", layout="wide")
 
 st.title("🔗 規劃摘要（分享視圖）")
 
-# 取 token（支援 st.query_params；若環境較舊，可改 experimental_get_query_params）
 q = st.query_params
 token = q.get("token", "") if isinstance(q.get("token"), str) else (q.get("token")[0] if q.get("token") else "")
 if not token:
@@ -18,7 +17,12 @@ if not token:
 
 share = ShareRepo.get_by_token(token)
 if not share:
-    st.error("連結無效或已移除。")
+    st.error("連結無效或已被撤銷。請聯絡您的顧問重新取得。")
+    st.stop()
+
+# 過期檢查
+if ShareRepo.is_expired(share):
+    st.error("連結已到期。請聯絡您的顧問重新取得新連結。")
     st.stop()
 
 # 記錄開啟
@@ -36,7 +40,6 @@ col[0].metric("淨遺產（元）", f"{case['net_estate']:,.0f}")
 col[1].metric("估算稅額（元）", f"{case['tax_estimate']:,.0f}")
 col[2].metric("建議預留稅源（元）", f"{case['liquidity_needed']:,.0f}")
 
-# 簡版 payload
 payload = {}
 try:
     payload = json.loads(case.get("payload_json") or case.get("plan_json") or "{}")
@@ -44,7 +47,7 @@ except Exception:
     payload = {}
 
 with st.expander("更多內容（簡版）", expanded=True):
-    st.write("此為簡版摘要，詳細規劃請與顧問預約會議。")
+    st.write("此頁為教育性質示意，僅供討論參考，不構成保險或法律建議。詳細規劃請與顧問預約會議。")
     st.json({
         "規則版本": payload.get("rules_version"),
         "課稅基礎_萬": payload.get("taxable_base_wan"),
@@ -52,10 +55,10 @@ with st.expander("更多內容（簡版）", expanded=True):
     })
 
 st.divider()
+
 st.subheader("我想要完整方案 ➜")
 if st.button("通知顧問，安排完整方案"):
     record_accept(token)
-    # 將 case_id 暫存到 Session，預約頁會自動帶入
     st.session_state["incoming_case_id"] = case["id"]
     st.success("已通知顧問！請點下方按鈕預約會談。")
 
