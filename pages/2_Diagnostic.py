@@ -1,34 +1,32 @@
 # pages/2_Diagnostic.py
-# 單位一律「萬元」，依正式規則（estate_tax_app.py）計算
-# 並建立一筆 case → 帶 case_id 前往 3_Result.py（穩健跳轉）
+# 單位一律「萬元」，依正式規則計算；建立案件 → 可靠跳轉至 3_Result
 
 import uuid
 from datetime import datetime
 from math import inf
 import streamlit as st
 
-# ========= Page Config =========
-st.set_page_config(page_title="遺產稅診斷", page_icon="💡", layout="wide")
-st.title("📊 遺產稅診斷（單位：萬元）")
-st.caption("依正式規則計算：免稅額、喪葬費、配偶與各類受扶養扣除皆已內建；級距為 10% / 15% / 20%。")
-
-# ========= 穩健跳轉（帶 case_id）=========
-def _goto_result(case_id: str):
-    """最穩健的跳轉：先帶上 case_id，再嘗試 switch_page；不行就 rerun；最後留超連結備援。"""
+# ========= 全域：啟動即檢查是否要跳轉 =========
+def _do_pending_redirect():
+    """若上次按鈕已要求跳轉，在一開始就處理（避免在表單上下文中跳轉失敗）"""
+    cid = st.session_state.get("__pending_goto_case_id__")
+    if not cid:
+        return
+    # 先清除旗標，避免循環
+    st.session_state["__pending_goto_case_id__"] = ""
+    # 帶上 query 參數
     try:
-        st.query_params.update({"case_id": case_id})
+        st.query_params.update({"case_id": cid})
     except Exception:
         pass
-
-    # 新版 API
-    if hasattr(st, "switch_page"):
-        try:
+    # 先試新版 API
+    try:
+        if hasattr(st, "switch_page"):
             st.switch_page("pages/3_Result.py")
             return
-        except Exception:
-            pass
-
-    # 退一步：rerun 讓 query_params 生效
+    except Exception:
+        pass
+    # 再試 rerun，讓 query_params 生效，Result 可被 page_link 進去
     try:
         if hasattr(st, "rerun"):
             st.rerun()
@@ -37,21 +35,25 @@ def _goto_result(case_id: str):
         return
     except Exception:
         pass
+    # 最後備援：顯示可點超連結
+    st.markdown(f"➡️ [前往結果頁](3_Result?case_id={cid})")
 
-    # 最後備援：提供超連結
-    st.markdown(f"➡️ [前往結果頁](3_Result?case_id={case_id})")
+_do_pending_redirect()  # <<< 放最前面執行
+
+# ========= Page Config =========
+st.set_page_config(page_title="遺產稅診斷", page_icon="💡", layout="wide")
+st.title("📊 遺產稅診斷（單位：萬元）")
+st.caption("依正式規則計算：免稅額、喪葬費、配偶與各類受扶養扣除皆已內建；級距為 10% / 15% / 20%。")
 
 # ========= 正式規則常數（單位：萬元）=========
-EXEMPT_AMOUNT = 1333.0   # 免稅額
-FUNERAL_EXPENSE = 138.0  # 喪葬費
+EXEMPT_AMOUNT = 1333.0
+FUNERAL_EXPENSE = 138.0
+SPOUSE_DEDUCTION_VALUE = 553.0
+ADULT_CHILD_DEDUCTION = 56.0
+PARENTS_DEDUCTION = 138.0
+DISABLED_DEDUCTION = 693.0
+OTHER_DEPENDENTS_DEDUCTION = 56.0
 
-SPOUSE_DEDUCTION_VALUE = 553.0        # 配偶扣除（一次）
-ADULT_CHILD_DEDUCTION = 56.0          # 子女（每人）
-PARENTS_DEDUCTION = 138.0             # 父母（每人）
-DISABLED_DEDUCTION = 693.0            # 重度身心障礙（每人）
-OTHER_DEPENDENTS_DEDUCTION = 56.0     # 其他受扶養（每人）
-
-# 累進級距（上限：萬元；稅率）
 TAX_BRACKETS = [
     (5621.0, 0.10),
     (11242.0, 0.15),
@@ -60,32 +62,24 @@ TAX_BRACKETS = [
 
 WAN = 10_000  # 1 萬元 = 10,000 元
 
-# ========= 工具函式 =========
+# ========= 工具 =========
 def fmt_wan(x: float) -> str:
     return f"{float(x):,.1f} 萬元"
 
-def compute_total_deductions_wan(
-    has_spouse: bool,
-    adult_children: int,
-    parents: int,
-    disabled_people: int,
-    other_dependents: int,
-) -> float:
-    """總扣除額（萬）＝喪葬＋（有配偶則配偶扣除）＋子女×56＋父母×138＋障礙×693＋其他×56"""
-    dependents_total = (
-        max(0, int(adult_children)) * ADULT_CHILD_DEDUCTION
-        + max(0, int(parents)) * PARENTS_DEDUCTION
-        + max(0, int(disabled_people)) * DISABLED_DEDUCTION
-        + max(0, int(other_dependents)) * OTHER_DEPENDENTS_DEDUCTION
+def compute_total_deductions_wan(has_spouse: bool, adult_children: int, parents: int,
+                                 disabled_people: int, other_dependents: int) -> float:
+    dep_total = (
+        max(0, int(adult_children)) * ADULT_CHILD_DEDUCTION +
+        max(0, int(parents)) * PARENTS_DEDUCTION +
+        max(0, int(disabled_people)) * DISABLED_DEDUCTION +
+        max(0, int(other_dependents)) * OTHER_DEPENDENTS_DEDUCTION
     )
-    return float(FUNERAL_EXPENSE + (SPOUSE_DEDUCTION_VALUE if has_spouse else 0.0) + dependents_total)
+    return float(FUNERAL_EXPENSE + (SPOUSE_DEDUCTION_VALUE if has_spouse else 0.0) + dep_total)
 
 def progressive_tax_wan(taxable_base_wan: float) -> float:
-    """依 TAX_BRACKETS（萬）計算累進稅額，回傳『萬』"""
     if taxable_base_wan <= 0:
         return 0.0
-    tax = 0.0
-    last = 0.0
+    tax, last = 0.0, 0.0
     for limit, rate in TAX_BRACKETS:
         if limit == inf or taxable_base_wan <= limit:
             tax += (taxable_base_wan - last) * rate
@@ -96,7 +90,6 @@ def progressive_tax_wan(taxable_base_wan: float) -> float:
 
 # ========= 介面 =========
 with st.form("estate_form"):
-    # 第一排：資產 / 負債（萬元）
     a1, a2 = st.columns(2)
     with a1:
         total_assets_wan = st.number_input("總資產（萬元）", min_value=0.0, step=10.0, value=10_000.0, format="%.1f")
@@ -105,7 +98,6 @@ with st.form("estate_form"):
 
     st.divider()
 
-    # 第二排：家庭成員（扣除額用）
     b1, b2, b3, b4, b5 = st.columns(5)
     with b1:
         has_spouse = st.checkbox("有配偶", value=True)
@@ -121,25 +113,13 @@ with st.form("estate_form"):
     submitted = st.form_submit_button("開始計算")
 
 if submitted:
-    # 淨遺產（萬）
     net_estate_wan = max(0.0, float(total_assets_wan) - float(total_liabilities_wan))
-
-    # 總扣除額（萬）
     total_deductions_wan = compute_total_deductions_wan(
-        has_spouse=bool(has_spouse),
-        adult_children=int(adult_children),
-        parents=int(parents),
-        disabled_people=int(disabled_people),
-        other_dependents=int(other_dependents),
+        bool(has_spouse), int(adult_children), int(parents), int(disabled_people), int(other_dependents)
     )
-
-    # 課稅基礎（萬）＝ max(淨遺產 − 免稅額 − 總扣除額, 0)
-    taxable_base_wan = max(0.0, float(net_estate_wan) - EXEMPT_AMOUNT - total_deductions_wan)
-
-    # 累進稅額（萬）
+    taxable_base_wan = max(0.0, net_estate_wan - EXEMPT_AMOUNT - total_deductions_wan)
     tax_wan = progressive_tax_wan(taxable_base_wan)
 
-    # 結果
     st.subheader("計算結果（單位：萬元）")
     c1, c2, c3, c4 = st.columns(4)
     c1.metric("淨遺產", fmt_wan(net_estate_wan))
@@ -147,10 +127,10 @@ if submitted:
     c3.metric("課稅基礎", fmt_wan(taxable_base_wan))
     c4.metric("估算遺產稅", fmt_wan(tax_wan))
 
-    # ===== 建立案件並前往結果頁 =====
+    # ===== 建立案件 & 設定跳轉旗標 =====
     st.markdown("---")
     st.subheader("下一步")
-    st.caption("按下按鈕後，會建立案件並帶您到結果頁（可下載報告、建立分享連結、回報成交）。")
+    st.caption("按下按鈕後，會建立案件並自動前往結果頁（可下載報告、建立分享連結、回報成交）。")
 
     from src.repos.case_repo import CaseRepo
     try:
@@ -158,32 +138,27 @@ if submitted:
     except Exception:
         def log_safe(*a, **k): pass
 
-    def _wan_to_yuan(x: float) -> float:
-        return float(x) * WAN
+    def _wan_to_yuan(x: float) -> float: return float(x) * WAN
 
     case_payload = {
         "id": uuid.uuid4().hex[:8].upper(),
         "advisor_id": st.session_state.get("advisor_id", "guest"),
         "advisor_name": st.session_state.get("advisor_name", "未登入"),
         "client_alias": "未命名",
-        # 金額以「元」存庫
         "assets_financial": 0.0,
         "assets_realestate": 0.0,
         "assets_business": 0.0,
         "liabilities": _wan_to_yuan(total_liabilities_wan),
         "net_estate": _wan_to_yuan(net_estate_wan),
         "tax_estimate": _wan_to_yuan(tax_wan),
-        "liquidity_needed": _wan_to_yuan(tax_wan),  # 先等於稅額；後續可接你的流動性模型
+        "liquidity_needed": _wan_to_yuan(tax_wan),
         "status": "Prospect",
         "payload_json": None,
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }
 
-    if st.checkbox("✅ 建立案件並前往結果頁", value=True, key="go_result_hint"):
-        pass
-
-    if st.button("建立案件", use_container_width=True):
+    if st.button("✅ 建立案件並前往結果頁", use_container_width=True):
         try:
             if hasattr(CaseRepo, "upsert"):
                 CaseRepo.upsert(case_payload)
@@ -200,6 +175,12 @@ if submitted:
                 pass
 
             st.success("案件已建立，正在前往結果頁…")
-            _goto_result(case_payload["id"])
+            # 只設定旗標，讓下一次 rerun 在頁首完成跳轉
+            st.session_state["__pending_goto_case_id__"] = case_payload["id"]
+            # 觸發 rerun
+            if hasattr(st, "rerun"):
+                st.rerun()
+            else:
+                st.experimental_rerun()
         except Exception as e:
             st.error(f"建立案件失敗：{e}")
