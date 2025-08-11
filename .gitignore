@@ -1,2 +1,4 @@
-/data/*.db
-/data/reports/
+# Secrets & local data
+.streamlit/secrets.toml
+*.env
+data/
