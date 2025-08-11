@@ -1,40 +1,31 @@
 # pages/3_Result.py
-# 穩健版：修正 charts 匯入錯誤、依賴失敗時自動退回、不讓整頁掛掉
+# 結果與報告 — 修正 charts 匯入錯誤、依賴失敗時退回、不讓整頁掛掉
 
 import sys, pathlib
 from datetime import datetime
 import streamlit as st
 
-# --------- 路徑保險 ---------
-ROOT = pathlib.Path(__file__).resolve().parents[1]  # 專案根
+ROOT = pathlib.Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.append(str(ROOT))
 
-# --------- 依賴（防呆） ---------
 _HAS_CHARTS = False
 try:
     from src.services.charts import (
-        tax_breakdown_bar,
-        asset_pie,
-        savings_compare_bar,
-        simple_sankey,
+        tax_breakdown_bar, asset_pie, savings_compare_bar, simple_sankey,
     )
     _HAS_CHARTS = True
 except Exception:
     def _noop(*a, **k): return None
     tax_breakdown_bar = asset_pie = savings_compare_bar = simple_sankey = _noop
 
-_HAS_REPORTS_PDF = False
 try:
-    from src.services.reports_pdf import build_pdf_report  # 會自動退回 HTML
-    _HAS_REPORTS_PDF = True
+    from src.services.reports_pdf import build_pdf_report
 except Exception:
     build_pdf_report = None
 
-_HAS_REPORTS = False
 try:
-    from src.services.reports import build_full_report_html  # 若有
-    _HAS_REPORTS = True
+    from src.services.reports import build_full_report_html
 except Exception:
     build_full_report_html = None
 
@@ -52,7 +43,6 @@ except Exception:
     def reward_won(*a, **k): return None
     def balance(*a, **k): return 0
 
-# --------- 工具 ---------
 def _fmt_money(x: float) -> str:
     try: return f"{float(x):,.0f}"
     except: return "—"
@@ -62,8 +52,7 @@ def _safe_pyplot(fig):
         st.pyplot(fig, use_container_width=True)
 
 def _load_case(case_id: str | None):
-    if CaseRepo is None:
-        return None
+    if CaseRepo is None: return None
     if case_id:
         row = CaseRepo.get(case_id)
         if row: return row
@@ -74,7 +63,6 @@ def _load_case(case_id: str | None):
         return None
 
 def _build_and_link_report(case: dict):
-    """嘗試輸出 PDF；不可用就退回 HTML。回傳 (path, label)"""
     if build_pdf_report:
         try:
             path = build_pdf_report(case)
@@ -86,8 +74,7 @@ def _build_and_link_report(case: dict):
             html = build_full_report_html(case)
             out = pathlib.Path("data/reports"); out.mkdir(parents=True, exist_ok=True)
             p = out / f"{case.get('id','report')}.html"
-            p.write_text(html, encoding="utf-8")
-            return str(p), "下載報告（HTML）"
+            p.write_text(html, encoding="utf-8"); return str(p), "下載報告（HTML）"
         except Exception:
             pass
     out = pathlib.Path("data/reports"); out.mkdir(parents=True, exist_ok=True)
@@ -102,10 +89,8 @@ def _build_and_link_report(case: dict):
       <li>建議預留稅源：{_fmt_money(case.get('liquidity_needed',0))}</li>
     </ul>
     <small>本報告為教育性質示意，不構成保險或法律建議。</small>"""
-    p.write_text(html, encoding="utf-8")
-    return str(p), "下載報告（HTML）"
+    p.write_text(html, encoding="utf-8"); return str(p), "下載報告（HTML）"
 
-# --------- UI ---------
 st.set_page_config(page_title="結果與報告", page_icon="📄", layout="wide")
 st.title("📄 結果與報告")
 
@@ -133,8 +118,7 @@ with st.expander("解鎖並下載完整報告", expanded=True):
 
     user_id = st.session_state.get("advisor_id")
     cost_tip = st.secrets.get("CREDITS", {}).get("REPORT_FULL_COST", 5)
-    unlocked_msg = None
-    credit_unlock = False
+    unlocked_msg = None; credit_unlock = False
 
     cols = st.columns(3)
     with cols[0]:
@@ -154,8 +138,7 @@ with st.expander("解鎖並下載完整報告", expanded=True):
         if user_id and _HAS_BILLING:
             st.metric("我的點數", balance(user_id))
 
-    if unlocked_msg:
-        st.info(unlocked_msg)
+    if unlocked_msg: st.info(unlocked_msg)
 
     if admin_unlock or credit_unlock:
         path, label = _build_and_link_report(case)
@@ -166,12 +149,10 @@ with st.expander("解鎖並下載完整報告", expanded=True):
 st.divider()
 
 left, right = st.columns(2)
-
 with left:
     if _HAS_CHARTS:
         tax = case.get("tax_estimate") or 0.0
-        # 若你的 charts 吃「萬」，改成 tax/10_000
-        fig1 = tax_breakdown_bar(tax)  # 視你的 charts 參數單位而定
+        fig1 = tax_breakdown_bar(tax)  # 若你的 charts 吃「萬」，改 tax/10_000
         _safe_pyplot(fig1)
     else:
         st.info("圖表模組未載入，略過稅額圖。")
