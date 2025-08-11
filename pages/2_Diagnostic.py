@@ -1,16 +1,51 @@
 # pages/2_Diagnostic.py
-# 單位一律「萬元」，依你提供的正式規則計算
-# 並建立一筆 case → 帶 case_id 前往 3_Result.py
+# 單位一律「萬元」，依正式規則（estate_tax_app.py）計算
+# 並建立一筆 case → 帶 case_id 前往 3_Result.py（穩健跳轉）
 
 import uuid
 from datetime import datetime
+from math import inf
 import streamlit as st
 
-# === 正式規則常數（單位：萬元） ===
+# ========= Page Config =========
+st.set_page_config(page_title="遺產稅診斷", page_icon="💡", layout="wide")
+st.title("📊 遺產稅診斷（單位：萬元）")
+st.caption("依正式規則計算：免稅額、喪葬費、配偶與各類受扶養扣除皆已內建；級距為 10% / 15% / 20%。")
+
+# ========= 穩健跳轉（帶 case_id）=========
+def _goto_result(case_id: str):
+    """最穩健的跳轉：先帶上 case_id，再嘗試 switch_page；不行就 rerun；最後留超連結備援。"""
+    try:
+        st.query_params.update({"case_id": case_id})
+    except Exception:
+        pass
+
+    # 新版 API
+    if hasattr(st, "switch_page"):
+        try:
+            st.switch_page("pages/3_Result.py")
+            return
+        except Exception:
+            pass
+
+    # 退一步：rerun 讓 query_params 生效
+    try:
+        if hasattr(st, "rerun"):
+            st.rerun()
+        else:
+            st.experimental_rerun()
+        return
+    except Exception:
+        pass
+
+    # 最後備援：提供超連結
+    st.markdown(f"➡️ [前往結果頁](3_Result?case_id={case_id})")
+
+# ========= 正式規則常數（單位：萬元）=========
 EXEMPT_AMOUNT = 1333.0   # 免稅額
 FUNERAL_EXPENSE = 138.0  # 喪葬費
 
-SPOUSE_DEDUCTION_VALUE = 553.0       # 配偶扣除（一次）
+SPOUSE_DEDUCTION_VALUE = 553.0        # 配偶扣除（一次）
 ADULT_CHILD_DEDUCTION = 56.0          # 子女（每人）
 PARENTS_DEDUCTION = 138.0             # 父母（每人）
 DISABLED_DEDUCTION = 693.0            # 重度身心障礙（每人）
@@ -20,15 +55,12 @@ OTHER_DEPENDENTS_DEDUCTION = 56.0     # 其他受扶養（每人）
 TAX_BRACKETS = [
     (5621.0, 0.10),
     (11242.0, 0.15),
-    (float("inf"), 0.20),
+    (inf,    0.20),
 ]
 
 WAN = 10_000  # 1 萬元 = 10,000 元
 
-st.set_page_config(page_title="遺產稅診斷", page_icon="💡", layout="wide")
-st.title("📊 遺產稅診斷（單位：萬元）")
-st.caption("依正式規則計算：免稅額、喪葬費、配偶與各類受扶養扣除皆已內建；級距為 10% / 15% / 20%。")
-
+# ========= 工具函式 =========
 def fmt_wan(x: float) -> str:
     return f"{float(x):,.1f} 萬元"
 
@@ -55,14 +87,14 @@ def progressive_tax_wan(taxable_base_wan: float) -> float:
     tax = 0.0
     last = 0.0
     for limit, rate in TAX_BRACKETS:
-        if limit == float("inf") or taxable_base_wan <= limit:
+        if limit == inf or taxable_base_wan <= limit:
             tax += (taxable_base_wan - last) * rate
             break
         tax += (limit - last) * rate
         last = limit
     return max(0.0, tax)
 
-# === 介面 ===
+# ========= 介面 =========
 with st.form("estate_form"):
     # 第一排：資產 / 負債（萬元）
     a1, a2 = st.columns(2)
@@ -121,13 +153,13 @@ if submitted:
     st.caption("按下按鈕後，會建立案件並帶您到結果頁（可下載報告、建立分享連結、回報成交）。")
 
     from src.repos.case_repo import CaseRepo
-    # 事件記錄（有就用，沒有就略過）
     try:
         from src.services.safe_event import log_safe
     except Exception:
         def log_safe(*a, **k): pass
 
-    def _wan_to_yuan(x): return float(x) * WAN
+    def _wan_to_yuan(x: float) -> float:
+        return float(x) * WAN
 
     case_payload = {
         "id": uuid.uuid4().hex[:8].upper(),
@@ -143,18 +175,21 @@ if submitted:
         "tax_estimate": _wan_to_yuan(tax_wan),
         "liquidity_needed": _wan_to_yuan(tax_wan),  # 先等於稅額；後續可接你的流動性模型
         "status": "Prospect",
-        "payload_json": None,  # 需要可放入 json.dumps(原始參數)
+        "payload_json": None,
         "created_at": datetime.utcnow().isoformat(),
         "updated_at": datetime.utcnow().isoformat(),
     }
 
-    if st.button("✅ 建立案件並前往結果頁", use_container_width=True):
+    if st.checkbox("✅ 建立案件並前往結果頁", value=True, key="go_result_hint"):
+        pass
+
+    if st.button("建立案件", use_container_width=True):
         try:
-            # 相容 upsert / create 兩種寫法
             if hasattr(CaseRepo, "upsert"):
                 CaseRepo.upsert(case_payload)
             else:
                 CaseRepo.create(case_payload)
+
             try:
                 log_safe(case_payload["id"], "CASE_CREATED", {
                     "source": "Diagnostic",
@@ -164,14 +199,7 @@ if submitted:
             except Exception:
                 pass
 
-            # 帶參數跳轉：新版支援 switch_page；不支援就顯示 page_link
-            try:
-                st.query_params.update({"case_id": case_payload["id"]})
-                st.success("案件已建立，準備前往結果頁…")
-                st.switch_page("pages/3_Result.py")
-            except Exception:
-                st.success("案件已建立，請點下方按鈕前往結果頁。")
-                st.page_link("pages/3_Result.py", label="➡️ 前往結果頁", icon="📄",
-                             args={"case_id": case_payload["id"]})
+            st.success("案件已建立，正在前往結果頁…")
+            _goto_result(case_payload["id"])
         except Exception as e:
             st.error(f"建立案件失敗：{e}")
