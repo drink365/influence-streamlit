@@ -1,5 +1,5 @@
 # pages/7_Events_Admin.py
-# 事件儀表板（依權限）— 修正 tz-naive vs tz-aware 比較造成的 TypeError
+# 事件儀表板（依權限）— tz-naive 修正、缺欄位安全處理
 
 from __future__ import annotations
 import streamlit as st
@@ -9,8 +9,7 @@ from datetime import datetime, timedelta, timezone
 st.set_page_config(page_title="事件儀表板（依權限）", page_icon="📈", layout="wide")
 st.title("📈 事件儀表板（依權限）")
 
-# ---------------- Utilities ----------------
-TZ = timezone(timedelta(hours=8))  # 顯示台灣時間
+TZ = timezone(timedelta(hours=8))
 NOW = datetime.now(TZ)
 
 def dt_range(days: int):
@@ -28,23 +27,19 @@ def col_or_zero(df: pd.DataFrame, name: str, dtype="int64") -> pd.Series:
     return pd.Series(0, index=df.index, dtype=dtype)
 
 def safe_df(rows) -> pd.DataFrame:
-    if rows is None:
-        return pd.DataFrame(columns=["ts", "advisor_id", "advisor_name", "event_type"])
-    if isinstance(rows, pd.DataFrame):
-        return rows
+    if rows is None: return pd.DataFrame(columns=["ts", "advisor_id", "advisor_name", "event_type"])
+    if isinstance(rows, pd.DataFrame): return rows
     return pd.DataFrame(list(rows))
 
 def human_period(s: datetime, e: datetime) -> str:
     return f"{s.strftime('%Y-%m-%d')} ~ {e.strftime('%Y-%m-%d')}"
 
-# ---------------- Data Source ----------------
 try:
     from src.repos.event_repo import EventRepo
 except Exception:
     EventRepo = None
 
 def load_events(start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
-    """讀事件，將 ts 統一轉成 tz-aware（先當 UTC，後轉台灣時區），再做期間過濾。"""
     if EventRepo is None:
         return pd.DataFrame(columns=["ts","advisor_id","advisor_name","event_type"])
     try:
@@ -61,23 +56,18 @@ def load_events(start_dt: datetime, end_dt: datetime) -> pd.DataFrame:
 
     df = safe_df(rows)
     for col in ["ts","advisor_id","advisor_name","event_type"]:
-        if col not in df.columns:
-            df[col] = None
+        if col not in df.columns: df[col] = None
 
-    # 🛠️ 關鍵修正：無論原始是否帶時區，一律先轉為 UTC-aware，再轉台灣時間
-    # - utc=True：naive 與 tz-aware 混雜時，全部變成 UTC 時間戳
-    # - tz_convert(TZ)：統一顯示/比較用的時區
+    # tz-naive → UTC-aware → 轉台灣
     try:
         df["ts"] = pd.to_datetime(df["ts"], errors="coerce", utc=True).dt.tz_convert(TZ)
     except Exception:
         df["ts"] = pd.NaT
 
-    # 期間過濾（兩邊都是 tz-aware）
     mask = df["ts"].between(start_dt, end_dt, inclusive="both")
     df = df[mask.fillna(False)]
     return df
 
-# ---------------- Controls ----------------
 days = st.slider("觀察天數", min_value=7, max_value=120, step=1, value=30)
 start_dt, end_dt = dt_range(days)
 st.caption(f"期間：{human_period(start_dt, end_dt)}")
@@ -86,9 +76,7 @@ role = st.session_state.get("advisor_role", "user")
 is_admin = (role == "admin")
 st.caption("管理者視角：顯示全站事件" if is_admin else "顧問視角：僅顯示本人事件")
 
-# ---------------- Load & Filter ----------------
 df = load_events(start_dt, end_dt)
-
 if df.empty:
     st.info("這段期間沒有事件紀錄。請稍後再試或調整觀察期間。")
     st.stop()
@@ -101,7 +89,6 @@ if not is_admin:
         st.info("這段期間您尚無事件紀錄。")
         st.stop()
 
-# ---------------- Aggregation ----------------
 df["event_type"] = df["event_type"].astype(str).str.upper().str.strip()
 
 pivot = (
@@ -142,9 +129,7 @@ pivot = pivot[existing].sort_values(by=["WON","UNLOCKED","SHARED","DIAG_DONE"], 
 st.subheader("顧問事件彙總")
 st.dataframe(pivot.reset_index(drop=True), use_container_width=True, hide_index=True)
 
-# ---------------- Daily Trend (optional) ----------------
 with st.expander("每日事件趨勢（可選）", expanded=False):
-    # 這裡 df['ts'] 已是 tz-aware（台灣時間），可直接取 date
     df["date"] = df["ts"].dt.date
     days_index = pd.date_range(start=start_dt.date(), end=end_dt.date(), freq="D")
     daily = (
